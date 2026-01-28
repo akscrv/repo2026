@@ -203,6 +203,13 @@ export const fileStorageAPI = {
   getSettingByRole: (role: string) => api.get(`/file-storage/settings/${role}`),
   updateSetting: (role: string, data: any) => api.put(`/file-storage/settings/${role}`, data),
   getMyLimits: () => api.get('/file-storage/my-limits'),
+  getManagementData: () => api.get('/file-storage/management'),
+  getAdminLimits: () => api.get('/file-storage/admin-limits'),
+  setUserLimit: (data: { userId: string; totalRecordLimit: number; description?: string }) => 
+    api.post('/file-storage/user-limit', data),
+  updateUserLimit: (userId: string, data: { totalRecordLimit: number; description?: string }) => 
+    api.put(`/file-storage/user-limit/${userId}`, data),
+  deleteUserLimit: (userId: string) => api.delete(`/file-storage/user-limit/${userId}`),
 }
 
 // Payment QR API

@@ -19,9 +19,9 @@ async function initializeFileStorageSettings() {
     console.log(`✅ Using existing superSuperAdmin: ${superSuperAdmin.email}`);
 
     const defaultSettings = [
-      { role: 'admin', totalRecordLimit: 500000, description: 'Total cumulative limit for admin users - 5 lakh records maximum', updatedBy: superSuperAdmin._id },
-      { role: 'superAdmin', totalRecordLimit: 1000000, description: 'Total cumulative limit for super admin users - 10 lakh records maximum', updatedBy: superSuperAdmin._id },
-      { role: 'superSuperAdmin', totalRecordLimit: 10000000, description: 'Total cumulative limit for super super admin users - 1 crore records maximum', updatedBy: superSuperAdmin._id }
+      { role: 'admin', totalRecordLimit: 500000, description: 'Total individual limit for admin users - 5 lakh records maximum', updatedBy: superSuperAdmin._id },
+      { role: 'superAdmin', totalRecordLimit: 1000000, description: 'Total individual limit for super admin users - 10 lakh records maximum', updatedBy: superSuperAdmin._id },
+      { role: 'superSuperAdmin', totalRecordLimit: 10000000, description: 'Total individual limit for super super admin users - 1 crore records maximum', updatedBy: superSuperAdmin._id }
     ];
 
     await FileStorageSettings.deleteMany({});

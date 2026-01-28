@@ -36,7 +36,8 @@ const notificationSchema = new mongoose.Schema({
   },
   vehicleId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'ExcelVehicle'
+    ref: 'ExcelVehicle',
+    required: false
   },
   
   // Location details

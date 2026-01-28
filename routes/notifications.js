@@ -1,4 +1,5 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const Notification = require('../models/Notification');
 const User = require('../models/User');
 const ExcelVehicle = require('../models/ExcelVehicle');
@@ -55,18 +56,24 @@ router.post('/log-action',
       }
 
       // Create notification
-      const notification = new Notification({
+      const notificationData = {
         user: req.user._id,
         userName: user.name,
         userRole: user.role,
         admin: user.createdBy._id,
         action,
         vehicleNumber,
-        vehicleId,
         ipAddress,
         location,
         isOnline: true
-      });
+      };
+
+      // Only add vehicleId if it's a valid ObjectId
+      if (vehicleId && vehicleId.trim() !== '' && mongoose.Types.ObjectId.isValid(vehicleId)) {
+        notificationData.vehicleId = vehicleId;
+      }
+
+      const notification = new Notification(notificationData);
 
       await notification.save();
 

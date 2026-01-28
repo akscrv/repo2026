@@ -21,7 +21,8 @@ import {
   Cog6ToothIcon,
   ChartBarIcon,
   PhoneIcon,
-  ClipboardDocumentListIcon
+  ClipboardDocumentListIcon,
+  ServerIcon
 } from '@heroicons/react/24/outline';
 import { 
   ChartBarIcon as ChartBarSolid 
@@ -61,6 +62,11 @@ const getNavigation = (userRole?: string) => {
       name: 'File Storage Handling', 
       href: '/file-storage-handling', 
       icon: DocumentArrowUpIcon
+    });
+    baseNavigation.push({ 
+      name: 'Storage Management', 
+      href: '/storage-management', 
+      icon: ServerIcon
     });
   }
 

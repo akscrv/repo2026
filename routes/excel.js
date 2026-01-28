@@ -8,6 +8,7 @@ const ExcelFile = require('../models/ExcelFile');
 const ExcelVehicle = require('../models/ExcelVehicle');
 const User = require('../models/User');
 const FileStorageSettings = require('../models/FileStorageSettings');
+const UserStorageLimit = require('../models/UserStorageLimit');
 const { authenticateToken, authorizeRole } = require('../middleware/auth');
 
 const router = express.Router();
@@ -217,21 +218,39 @@ router.post('/upload',
         });
       }
 
-      // Check total cumulative record limit for the user's role
+      // Check storage limit - Individual limit takes priority over role limit
       const recordCount = totalRows - 1; // Exclude header row
       const userRole = req.user.role;
       
-      // Get file storage settings for the user's role
-      const storageSettings = await FileStorageSettings.findOne({ 
-        role: userRole, 
+      // First, check if user has individual custom limit
+      let userStorageLimit = await UserStorageLimit.findOne({ 
+        userId: req.user._id, 
         isActive: true 
       });
 
-      if (!storageSettings) {
-        return res.status(400).json({
-          success: false,
-          message: 'File storage settings not found for your role. Please contact administrator.'
+      let totalRecordLimit;
+      let limitType = 'role'; // 'individual' or 'role'
+
+      if (userStorageLimit) {
+        // User has custom individual limit
+        totalRecordLimit = userStorageLimit.totalRecordLimit;
+        limitType = 'individual';
+      } else {
+        // Fall back to role-based limit
+        const storageSettings = await FileStorageSettings.findOne({ 
+          role: userRole, 
+          isActive: true 
         });
+
+        if (!storageSettings) {
+          return res.status(400).json({
+            success: false,
+            message: 'File storage settings not found for your role. Please contact administrator.'
+          });
+        }
+
+        totalRecordLimit = storageSettings.totalRecordLimit;
+        limitType = 'role';
       }
 
       // Calculate current usage for this user
@@ -251,16 +270,18 @@ router.post('/upload',
       ]);
 
       const usedRecords = currentUsage.length > 0 ? currentUsage[0].totalRecords : 0;
-      const remainingRecords = Math.max(0, storageSettings.totalRecordLimit - usedRecords);
+      const remainingRecords = Math.max(0, totalRecordLimit - usedRecords);
 
       if (recordCount > remainingRecords) {
+        const limitTypeText = limitType === 'individual' ? 'individual' : `role (${userRole})`;
         return res.status(400).json({
           success: false,
-          message: `Total record limit exceeded. Your role (${userRole}) has a total limit of ${storageSettings.totalRecordLimit.toLocaleString()} records. You have used ${usedRecords.toLocaleString()} records and can upload maximum ${remainingRecords.toLocaleString()} more records. File contains ${recordCount.toLocaleString()} records.`,
-          totalLimit: storageSettings.totalRecordLimit,
+          message: `Total record limit exceeded. Your ${limitTypeText} limit is ${totalRecordLimit.toLocaleString()} records. You have used ${usedRecords.toLocaleString()} records and can upload maximum ${remainingRecords.toLocaleString()} more records. File contains ${recordCount.toLocaleString()} records.`,
+          totalLimit: totalRecordLimit,
           usedRecords: usedRecords,
           remainingRecords: remainingRecords,
-          fileRecords: recordCount
+          fileRecords: recordCount,
+          limitType: limitType
         });
       }
 
@@ -1352,7 +1373,7 @@ router.get('/vehicles',
   async (req, res) => {
     try {
       const page = parseInt(req.query.page) || 1;
-      const limit = Math.min(parseInt(req.query.limit) || 20, 50); // Reduced max limit
+      const limit = Math.min(parseInt(req.query.limit) || 20, 1000); // Allow up to 1000 results for complete search
       const { search, searchType } = req.query;
 
       // Validate search term

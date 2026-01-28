@@ -22,6 +22,7 @@ import SuperSuperAdminPaymentManagement from './components/SuperSuperAdminPaymen
 import SuperAdminMyPayments from './components/SuperAdminMyPayments'
 import AppManagement from './components/AppManagement'
 import FileStorageHandling from './components/FileStorageHandling'
+import StorageManagement from './pages/StorageManagement'
 import BackOfficeNumbers from './pages/BackOfficeNumbers'
 import Inventory from './pages/Inventory'
 import Landing from './pages/Landing'
@@ -68,6 +69,7 @@ function AppContent() {
         <Route path="/super-admin-my-payments" element={<SuperAdminMyPayments />} />
         <Route path="/app-management" element={<AppManagement />} />
         <Route path="/file-storage-handling" element={<FileStorageHandling />} />
+        <Route path="/storage-management" element={<StorageManagement />} />
         <Route path="/otp-management" element={<OTPManagement />} />
         <Route path="/notifications" element={<Notifications />} />
                           <Route path="/back-office-numbers" element={<BackOfficeNumbers />} />
