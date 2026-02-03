@@ -112,7 +112,26 @@ export default function SessionStatus({ className = '' }: SessionStatusProps) {
     const handleBeforeUnload = () => {
       if (user) {
         // User is closing the page - set offline immediately
-        navigator.sendBeacon(`${import.meta.env.VITE_API_URL || 'http://localhost:5000/api'}/auth/update-offline-status`, JSON.stringify({}));
+        const getApiUrl = () => {
+          const currentHost = window.location.hostname;
+          
+          // Check if we're running through ngrok
+          if (currentHost.includes('ngrok-free.app') || 
+              currentHost.includes('ngrok.io') || 
+              currentHost.includes('ngrok.app')) {
+            return `${window.location.protocol}//${currentHost}/api`;
+          }
+          
+          // In production, use the same host as the frontend
+          if (process.env.NODE_ENV === 'production' || window.location.hostname !== 'localhost') {
+            return `${window.location.protocol}//${window.location.host}/api`;
+          }
+          
+          // Use environment variable or default for development
+          return (import.meta as any).env?.VITE_API_URL || 'http://localhost:5000/api';
+        };
+        
+        navigator.sendBeacon(`${getApiUrl()}/auth/update-offline-status`, JSON.stringify({}));
       }
     };
 
