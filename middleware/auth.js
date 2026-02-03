@@ -47,27 +47,39 @@ const authenticateToken = async (req, res, next) => {
     }
 
     // Validate session token for single-session-per-user
-    if (!user.currentSessionToken || !decoded.sessionToken) {
-      return res.status(401).json({
-        success: false,
-        message: 'Session expired. Please login again.'
-      });
-    }
+    // Admin role can have multiple simultaneous sessions, so skip strict validation
+    if (user.role !== 'admin') {
+      // For non-admin roles, enforce single session
+      if (!user.currentSessionToken || !decoded.sessionToken) {
+        return res.status(401).json({
+          success: false,
+          message: 'Session expired. Please login again.'
+        });
+      }
 
-    // Check if session token matches
-    if (user.currentSessionToken !== decoded.sessionToken) {
-      return res.status(401).json({
-        success: false,
-        message: 'Session invalidated. You have been logged out from another device.'
-      });
-    }
+      // Check if session token matches
+      if (user.currentSessionToken !== decoded.sessionToken) {
+        return res.status(401).json({
+          success: false,
+          message: 'Session invalidated. You have been logged out from another device.'
+        });
+      }
 
-    // Check if session has expired
-    if (user.sessionExpiresAt && new Date() > user.sessionExpiresAt) {
-      return res.status(401).json({
-        success: false,
-        message: 'Session expired. Please login again.'
-      });
+      // Check if session has expired
+      if (user.sessionExpiresAt && new Date() > user.sessionExpiresAt) {
+        return res.status(401).json({
+          success: false,
+          message: 'Session expired. Please login again.'
+        });
+      }
+    } else {
+      // For admin role, only check if token is expired (allow multiple sessions)
+      if (user.sessionExpiresAt && new Date() > user.sessionExpiresAt) {
+        return res.status(401).json({
+          success: false,
+          message: 'Session expired. Please login again.'
+        });
+      }
     }
 
     // Update last seen (but not online status on every request)

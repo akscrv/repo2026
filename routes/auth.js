@@ -188,8 +188,11 @@ router.post('/login', [
     }
 
     // For admin - direct login
-    // Invalidate any existing session first (single-session-per-user)
-    user.invalidateSession();
+    // Admin role can login from multiple places simultaneously
+    // Only invalidate session for non-admin roles (single-session-per-user)
+    if (user.role !== 'admin') {
+      user.invalidateSession();
+    }
     
     // Update last login and add to login history
     user.lastLogin = new Date();
