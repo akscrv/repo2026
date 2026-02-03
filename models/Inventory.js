@@ -4,7 +4,7 @@ const inventorySchema = new mongoose.Schema({
   // Auto-generated fields (from vehicle data)
   vehicleId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'ExcelVehicle',
+    ref: 'VehicleLookup', // ✅ Updated: References VehicleLookup instead of ExcelVehicle
     required: true
   },
   registrationNumber: {

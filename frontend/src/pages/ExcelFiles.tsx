@@ -16,7 +16,8 @@ import {
   XCircleIcon,
   ExclamationTriangleIcon,
   ClockIcon,
-  ArrowPathIcon
+  ArrowPathIcon,
+  PencilIcon
 } from '@heroicons/react/24/outline'
 import { useAuth } from '../hooks/useAuth'
 import AdminAssignmentModal from '../components/AdminAssignmentModal'
@@ -42,6 +43,11 @@ interface ExcelFile {
     name: string
     email: string
   }>
+  sharedAdmins?: Array<{
+    _id: string
+    name: string
+    email: string
+  }>
   totalRows: number
   processedRows: number
   failedRows: number
@@ -56,6 +62,7 @@ interface UploadForm {
   file: File | null
   assignedTo: string
   assignedAdmins: string[]
+  sharedAdmins: string[] // For admin-to-admin file sharing
 }
 
 export default function ExcelFiles() {
@@ -73,7 +80,8 @@ export default function ExcelFiles() {
   const [uploadForm, setUploadForm] = useState<UploadForm>({
     file: null,
     assignedTo: '',
-    assignedAdmins: []
+    assignedAdmins: [],
+    sharedAdmins: []
   })
   const [isUploading, setIsUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
@@ -86,6 +94,11 @@ export default function ExcelFiles() {
   // State for sharing details modal
   const [showSharingModal, setShowSharingModal] = useState(false)
   const [selectedSharingFile, setSelectedSharingFile] = useState<ExcelFile | null>(null)
+  
+  // State for edit sharing modal
+  const [showEditSharingModal, setShowEditSharingModal] = useState(false)
+  const [selectedEditFile, setSelectedEditFile] = useState<ExcelFile | null>(null)
+  const [editSharedAdmins, setEditSharedAdmins] = useState<string[]>([])
 
   // Fetch Excel files
   const { data, isLoading, error } = useQuery({
@@ -94,11 +107,12 @@ export default function ExcelFiles() {
     staleTime: 30000,
   })
 
-  // Fetch admins for assignment (only for super admin)
+  // Fetch admins for assignment (for super admin) or sharing (for admin with permission)
   const { data: adminsData, error: adminsError, isLoading: adminsLoading } = useQuery({
     queryKey: ['admins'],
     queryFn: () => usersAPI.getAdmins(),
-    enabled: currentUser?.role === 'superSuperAdmin' || currentUser?.role === 'superAdmin',
+    enabled: (currentUser?.role === 'superSuperAdmin' || currentUser?.role === 'superAdmin') || 
+             (currentUser?.role === 'admin' && currentUser?.canShareFiles),
     retry: 1,
     onError: (error) => {
       console.error('Failed to fetch admins:', error)
@@ -117,25 +131,108 @@ export default function ExcelFiles() {
   // Mutations
   const uploadMutation = useMutation({
     mutationFn: (formData: FormData) => excelAPI.upload(formData),
-    onSuccess: () => {
+    onSuccess: (response: any) => {
       queryClient.invalidateQueries({ queryKey: ['excel-files'] })
-      toast.success('Excel file uploaded successfully')
+      queryClient.invalidateQueries({ queryKey: ['excel-vehicles-fast'] })
+      
+      // Show success message with storage type info if available
+      const storageType = response?.data?.data?.storageType
+      const message = storageType === 'GCS' 
+        ? 'Excel file uploaded to cloud storage successfully' 
+        : 'Excel file uploaded successfully'
+      toast.success(message)
+      
       setShowUploadModal(false)
       resetUploadForm()
     },
     onError: (error: any) => {
-      toast.error(error.response?.data?.message || 'Failed to upload file')
+      // Handle storage quota exceeded (507)
+      if (error.response?.status === 507) {
+        toast.error(
+          error.response?.data?.message || 
+          'Storage quota exceeded. Please contact administrator to upgrade your storage plan.',
+          { duration: 6000 }
+        )
+      } 
+      // Handle GCS configuration errors
+      else if (error.response?.data?.message?.includes('Google Cloud Storage') || 
+               error.response?.data?.message?.includes('GCS')) {
+        toast.error(
+          error.response?.data?.message || 
+          'Cloud storage configuration error. Please contact administrator.',
+          { duration: 5000 }
+        )
+      }
+      // Generic error
+      else {
+        toast.error(error.response?.data?.message || 'Failed to upload file')
+      }
     }
   })
 
+  const [deletingFileId, setDeletingFileId] = useState<string | null>(null)
+
   const deleteMutation = useMutation({
-    mutationFn: (fileId: string) => excelAPI.deleteFile(fileId),
-    onSuccess: () => {
+    mutationFn: async (fileId: string) => {
+      setDeletingFileId(fileId)
+      
+      // Show initial loading toast
+      const toastId = toast.loading('Starting deletion...', {
+        duration: 5000
+      })
+
+      // Simulate progress updates
+      const progressSteps = [
+        { delay: 300, message: '🗑️ Deleting VehicleLookup records...' },
+        { delay: 600, message: '🗑️ Deleting ExcelVehicle records...' },
+        { delay: 900, message: '🗑️ Deleting ExcelFile record...' },
+        { delay: 1200, message: '🗑️ Deleting GCS file...' },
+        { delay: 1500, message: '🧹 Clearing cache...' }
+      ]
+
+      // Update progress
+      for (const step of progressSteps) {
+        await new Promise(resolve => setTimeout(resolve, step.delay))
+        toast.loading(step.message, { id: toastId })
+      }
+
+      // Make the actual API call
+      const response = await excelAPI.deleteFile(fileId)
+      
+      // Dismiss loading toast
+      toast.dismiss(toastId)
+      
+      return { response, fileId }
+    },
+    onSuccess: ({ response, fileId }) => {
+      setDeletingFileId(null)
+      
+      // Optimistically remove from UI
+      queryClient.setQueryData(['excel-files'], (oldData: any) => {
+        if (!oldData?.data?.data) return oldData
+        return {
+          ...oldData,
+          data: {
+            ...oldData.data,
+            data: oldData.data.data.filter((file: ExcelFile) => file._id !== fileId)
+          }
+        }
+      })
+      
+      // Invalidate to refresh
       queryClient.invalidateQueries({ queryKey: ['excel-files'] })
-      toast.success('File deleted successfully')
+      
+      // Show success with details
+      const deleted = response.data?.deleted || {}
+      const vehicleCount = (deleted.vehicleLookup || 0) + (deleted.excelVehicle || 0)
+      toast.success(
+        `✅ File deleted successfully! Removed ${vehicleCount} vehicle record${vehicleCount !== 1 ? 's' : ''}`,
+        { duration: 4000 }
+      )
     },
     onError: (error: any) => {
-      toast.error(error.response?.data?.message || 'Failed to delete file')
+      setDeletingFileId(null)
+      toast.error(error.response?.data?.message || 'Failed to delete file', { duration: 4000 })
     }
   })
 
@@ -148,6 +245,26 @@ export default function ExcelFiles() {
     },
     onError: (error: any) => {
       toast.error(error.response?.data?.message || 'Failed to reassign file')
+    }
+  })
+
+  // Mutation for updating shared admins
+  const updateSharedAdminsMutation = useMutation({
+    mutationFn: ({ fileId, sharedAdmins }: { fileId: string; sharedAdmins: string[] }) => 
+      excelAPI.updateSharedAdmins(fileId, { sharedAdmins }),
+    onSuccess: (response: any) => {
+      console.log('✅ Shared admins updated:', response.data);
+      // Invalidate and refetch immediately
+      queryClient.invalidateQueries({ queryKey: ['excel-files'] })
+      queryClient.refetchQueries({ queryKey: ['excel-files'] })
+      setShowEditSharingModal(false)
+      setSelectedEditFile(null)
+      setEditSharedAdmins([])
+      toast.success('Shared admins updated successfully')
+    },
+    onError: (error: any) => {
+      console.error('❌ Failed to update shared admins:', error);
+      toast.error(error.response?.data?.message || 'Failed to update shared admins')
     }
   })
 
@@ -208,15 +325,16 @@ export default function ExcelFiles() {
       })
     }, 500)
 
-    // Update status messages
-    const statusInterval = setInterval(() => {
-      setUploadStatus(prev => {
-        if (prev.includes('Processing')) return 'Validating data...'
-        if (prev.includes('Validating')) return 'Processing rows...'
-        if (prev.includes('Processing rows')) return 'Creating vehicles...'
-        return 'Processing...'
-      })
-    }, 1500)
+      // Update status messages
+      const statusInterval = setInterval(() => {
+        setUploadStatus(prev => {
+          if (prev.includes('Uploading')) return 'Uploading to cloud storage...'
+          if (prev.includes('Processing')) return 'Validating data...'
+          if (prev.includes('Validating')) return 'Processing rows...'
+          if (prev.includes('Processing rows')) return 'Creating vehicles...'
+          return 'Uploading to cloud storage...'
+        })
+      }, 1500)
     
     try {
       const formData = new FormData()
@@ -227,6 +345,11 @@ export default function ExcelFiles() {
         if (uploadForm.assignedAdmins.length > 0) {
           formData.append('assignedAdmins', JSON.stringify(uploadForm.assignedAdmins))
         }
+      }
+      
+      // For admin users with sharing permission, send sharedAdmins
+      if (currentUser?.role === 'admin' && currentUser?.canShareFiles && uploadForm.sharedAdmins.length > 0) {
+        formData.append('sharedAdmins', JSON.stringify(uploadForm.sharedAdmins))
       }
 
       await uploadMutation.mutateAsync(formData)
@@ -260,7 +383,8 @@ export default function ExcelFiles() {
     setUploadForm({
       file: null,
       assignedTo: '',
-      assignedAdmins: []
+      assignedAdmins: [],
+      sharedAdmins: []
     })
   }
 
@@ -329,18 +453,121 @@ export default function ExcelFiles() {
   }
 
   // Function to determine if user can see original filename
+  // Rules:
+  // 1. Super Admin uploads:
+  //    - Primary admin (assignedTo): Original filename
+  //    - Other assigned admins (assignedAdmins): Masked filename
+  // 2. Admin uploads:
+  //    - Primary admin (uploadedBy): Original filename
+  //    - Shared admins (sharedAdmins): Masked filename (only if file is shared)
   const getDisplayFileName = (file: ExcelFile): string => {
-    // Only primary admin (assignedTo) and auditors can see original filename
-    const isPrimaryAdmin = currentUser?.role === 'admin' && file.assignedTo._id === (currentUser as any)?.id
-    const isAuditor = currentUser?.role === 'auditor'
-    const isSuperAdmin = currentUser?.role === 'superAdmin'
-    const isSuperSuperAdmin = currentUser?.role === 'superSuperAdmin'
+    if (!currentUser) return 'Excel File'
     
-    if (isPrimaryAdmin || isAuditor || isSuperAdmin || isSuperSuperAdmin) {
+    const currentUserId = currentUser._id
+    const isSuperAdmin = currentUser?.role === 'superAdmin' || currentUser?.role === 'superSuperAdmin'
+    
+    // Super Admins always see original filename
+    if (isSuperAdmin) {
       return file.originalName
     }
     
-    // For others, show a generic name
+    const isSuperAdminUpload = file.uploadedBy.role === 'superAdmin' || file.uploadedBy.role === 'superSuperAdmin'
+    const isAdminUpload = file.uploadedBy.role === 'admin'
+    
+    // ========== SUPER ADMIN UPLOAD ==========
+    if (isSuperAdminUpload) {
+      if (currentUser?.role === 'admin') {
+        // Check if current user is primary admin (assignedTo)
+        const isPrimaryAdmin = file.assignedTo._id === currentUserId
+        
+        if (isPrimaryAdmin) {
+          // Primary admin: Original filename
+          return file.originalName
+        }
+        
+        // Check if current user is in assignedAdmins (other assigned admins)
+        const isInAssignedAdmins = file.assignedAdmins?.some((admin: any) => {
+          const adminId = typeof admin === 'string' ? admin : (admin._id || admin)
+          return adminId === currentUserId
+        })
+        
+        if (isInAssignedAdmins) {
+          // Other assigned admins: Masked filename
+          return `FILE_${file._id.substring(0, 8).toUpperCase()}.xlsx`
+        }
+      } else if (currentUser?.role === 'auditor' && currentUser?.createdBy?._id) {
+        // Check if auditor's admin is primary admin (assignedTo)
+        const isPrimaryAdminAuditor = file.assignedTo._id === currentUser.createdBy._id
+        
+        if (isPrimaryAdminAuditor) {
+          // Primary admin's auditor: Original filename
+          return file.originalName
+        }
+        
+        // Check if auditor's admin is in assignedAdmins (other assigned admins)
+        const isAssignedAdminAuditor = file.assignedAdmins?.some((admin: any) => {
+          const adminId = typeof admin === 'string' ? admin : (admin._id || admin)
+          return adminId === currentUser.createdBy._id
+        })
+        
+        if (isAssignedAdminAuditor) {
+          // Assigned admin's auditor: Masked filename
+          return `FILE_${file._id.substring(0, 8).toUpperCase()}.xlsx`
+        }
+      }
+    }
+    
+    // ========== ADMIN UPLOAD ==========
+    if (isAdminUpload) {
+      if (currentUser?.role === 'admin') {
+        // Check if current user is the uploader (primary admin)
+        const isUploader = file.uploadedBy._id === currentUserId
+        
+        if (isUploader) {
+          // Primary admin (uploader): Original filename
+          return file.originalName
+        }
+        
+        // Check if current user is in sharedAdmins (only if file is shared)
+        const isSharedAdmin = file.sharedAdmins?.some((admin: any) => {
+          const adminId = typeof admin === 'string' ? admin : (admin._id || admin)
+          return adminId === currentUserId
+        })
+        
+        if (isSharedAdmin) {
+          // Shared admin: Masked filename
+          return `FILE_${file._id.substring(0, 8).toUpperCase()}.xlsx`
+        }
+        
+        // If admin upload and user is not uploader and not in sharedAdmins, they shouldn't see this file
+        // But if they do (edge case), show masked name
+        return 'Excel File'
+      } else if (currentUser?.role === 'auditor' && currentUser?.createdBy?._id) {
+        // Check if auditor's admin is the uploader (primary admin)
+        const isOwnerAuditor = file.uploadedBy._id === currentUser.createdBy._id
+        
+        if (isOwnerAuditor) {
+          // Primary admin's auditor (owner): Original filename
+          return file.originalName
+        }
+        
+        // Check if auditor's admin is in sharedAdmins
+        const isSharedAdminAuditor = file.sharedAdmins?.some((admin: any) => {
+          const adminId = typeof admin === 'string' ? admin : (admin._id || admin)
+          return adminId === currentUser.createdBy._id
+        })
+        
+        if (isSharedAdminAuditor) {
+          // Shared admin's auditor: Masked filename
+          return `FILE_${file._id.substring(0, 8).toUpperCase()}.xlsx`
+        }
+        
+        // If auditor's admin doesn't have access, they shouldn't see this file
+        return 'Excel File'
+      }
+    }
+    
+    // For others (field agents, etc.), show masked name
     return 'Excel File'
   }
 
@@ -548,44 +775,115 @@ export default function ExcelFiles() {
                         </div>
                         
                         {/* Assigned Admins Display */}
-                        {file.assignedAdmins && file.assignedAdmins.length > 0 && (
+                        {/* Always show for admin uploads, or if there are assigned/shared admins */}
+                        {((currentUser?.role === 'admin' && file.uploadedBy._id === currentUser._id) || 
+                          (file.assignedAdmins && file.assignedAdmins.length > 0) || 
+                          (file.sharedAdmins && file.sharedAdmins.length > 0)) && (
                           <div className="mt-2">
                             {/* Show comprehensive access info for admin who uploaded the file */}
-                            {currentUser?.role === 'admin' && file.uploadedBy._id === currentUser._id && (
-                              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                                <div className="flex items-center space-x-2 text-xs text-blue-700 mb-2">
-                                  <UserIcon className="h-3 w-3" />
-                                  <span className="font-medium">Your file is shared with:</span>
+                            {currentUser?.role === 'admin' && file.uploadedBy._id === currentUser._id && (() => {
+                              // For admin uploads, show sharedAdmins (exclude the uploader/primary admin)
+                              const sharedAdminsList = file.sharedAdmins?.filter((admin: any) => {
+                                const adminId = typeof admin === 'object' ? admin._id : admin;
+                                return adminId !== file.uploadedBy._id;
+                              }) || [];
+                              
+                              // For super admin uploads, show assignedAdmins (exclude the primary admin)
+                              const assignedAdminsList = file.assignedAdmins?.filter((admin: any) => {
+                                const adminId = typeof admin === 'object' ? admin._id : admin;
+                                const primaryAdminId = file.assignedTo?._id || file.assignedTo;
+                                return adminId !== primaryAdminId;
+                              }) || [];
+                              
+                              // Use sharedAdmins for admin uploads, assignedAdmins for super admin uploads
+                              const adminsToShow = file.sharedAdmins && file.sharedAdmins.length > 0 ? sharedAdminsList : assignedAdminsList;
+                              
+                              // Always show the section for admin uploads, even if no admins have access
+                              return (
+                                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 relative">
+                                  <div className="flex items-center justify-between mb-2">
+                                    <div className="flex items-center space-x-2 text-xs text-blue-700">
+                                      <UserIcon className="h-3 w-3" />
+                                      <span className="font-medium">Your file is shared with:</span>
+                                    </div>
+                                    <button
+                                      onClick={() => {
+                                        const currentSharedAdmins = file.sharedAdmins?.map((admin: any) => 
+                                          typeof admin === 'object' ? admin._id : admin
+                                        ) || [];
+                                        setEditSharedAdmins(currentSharedAdmins);
+                                        setSelectedEditFile(file);
+                                        setShowEditSharingModal(true);
+                                      }}
+                                      className="p-1 text-blue-600 hover:text-blue-800 hover:bg-blue-100 rounded transition-colors"
+                                      title="Edit shared admins"
+                                    >
+                                      <PencilIcon className="h-4 w-4" />
+                                    </button>
+                                  </div>
+                                  {adminsToShow.length > 0 ? (
+                                    <>
+                                      <div className="flex flex-wrap gap-1">
+                                        {adminsToShow.map((admin: any, index: number) => {
+                                          const adminName = typeof admin === 'object' ? admin.name : admin;
+                                          const adminId = typeof admin === 'object' ? admin._id : admin;
+                                          return (
+                                            <span key={adminId} className="bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs font-medium">
+                                              {adminName}
+                                              {index < adminsToShow.length - 1 && ','}
+                                            </span>
+                                          );
+                                        })}
+                                      </div>
+                                      <div className="text-xs text-blue-600 mt-1">
+                                        Total: {adminsToShow.length} admin{adminsToShow.length !== 1 ? 's' : ''} have access
+                                      </div>
+                                    </>
+                                  ) : (
+                                    <div className="text-xs text-gray-500 italic">
+                                      No admins have access to this file. Click the edit button to share with other admins.
+                                    </div>
+                                  )}
                                 </div>
-                                <div className="flex flex-wrap gap-1">
-                                  {file.assignedAdmins.map((admin, index) => (
-                                    <span key={admin._id} className="bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs font-medium">
-                                      {admin.name}
-                                      {index < file.assignedAdmins!.length - 1 && ','}
-                                    </span>
-                                  ))}
-                                </div>
-                                <div className="text-xs text-blue-600 mt-1">
-                                  Total: {file.assignedAdmins.length} admin{file.assignedAdmins.length !== 1 ? 's' : ''} have access
-                                </div>
-                              </div>
-                            )}
+                              );
+                            })()}
                             
-                            {/* Show "Also assigned to" for other cases */}
-                            {!(currentUser?.role === 'admin' && file.uploadedBy._id === currentUser._id) && file.assignedAdmins.length > 1 && (
-                              <div className="flex items-center space-x-2 text-xs text-gray-500">
-                                <UserIcon className="h-3 w-3" />
-                                <span>Also assigned to:</span>
-                                <div className="flex flex-wrap gap-1">
-                                  {file.assignedAdmins.slice(1).map((admin, index) => (
-                                    <span key={admin._id} className="bg-gray-100 px-2 py-1 rounded text-xs">
-                                      {admin.name}
-                                      {index < file.assignedAdmins!.length - 2 && ','}
-                                    </span>
-                                  ))}
+                            {/* Show "Also assigned to" ONLY for primary admin */}
+                            {(() => {
+                              // Check if current user is the primary admin
+                              const primaryAdminId = file.assignedTo?._id || file.assignedTo;
+                              const currentUserId = currentUser?._id;
+                              const isPrimaryAdmin = primaryAdminId === currentUserId;
+                              
+                              // Also check for superSuperAdmin/superAdmin (they can see everything)
+                              const isSuperAdmin = currentUser?.role === 'superSuperAdmin' || currentUser?.role === 'superAdmin';
+                              
+                              // Only show if user is primary admin or super admin
+                              if (!isPrimaryAdmin && !isSuperAdmin) {
+                                return null;
+                              }
+                              
+                              // Filter out the primary admin from assignedAdmins
+                              const otherAdmins = file.assignedAdmins?.filter((admin: any) => {
+                                const adminId = typeof admin === 'object' ? admin._id : admin;
+                                return adminId !== primaryAdminId;
+                              }) || [];
+                              
+                              return otherAdmins.length > 0 ? (
+                                <div className="flex items-center space-x-2 text-xs text-gray-500">
+                                  <UserIcon className="h-3 w-3" />
+                                  <span>Also assigned to:</span>
+                                  <div className="flex flex-wrap gap-1">
+                                    {otherAdmins.map((admin: any, index: number) => (
+                                      <span key={typeof admin === 'object' ? admin._id : admin} className="bg-gray-100 px-2 py-1 rounded text-xs">
+                                        {typeof admin === 'object' ? admin.name : admin}
+                                        {index < otherAdmins.length - 1 && ','}
+                                      </span>
+                                    ))}
+                                  </div>
                                 </div>
-                              </div>
-                            )}
+                              ) : null;
+                            })()}
                           </div>
                         )}
                       </div>
@@ -618,10 +916,19 @@ export default function ExcelFiles() {
                       )}
                       <button
                         onClick={() => handleDelete(file._id)}
-                        className="text-red-600 hover:text-red-800 p-2"
-                        title="Delete file"
+                        disabled={deleteMutation.isPending}
+                        className={`p-2 ${
+                          deleteMutation.isPending && deletingFileId === file._id
+                            ? 'text-gray-400 cursor-not-allowed'
+                            : 'text-red-600 hover:text-red-800'
+                        }`}
+                        title={deleteMutation.isPending && deletingFileId === file._id ? 'Deleting...' : 'Delete file'}
                       >
-                        <TrashIcon className="h-5 w-5" />
+                        {deleteMutation.isPending && deletingFileId === file._id ? (
+                          <ArrowPathIcon className="h-5 w-5 animate-spin" />
+                        ) : (
+                          <TrashIcon className="h-5 w-5" />
+                        )}
                       </button>
                     </div>
                   </div>
@@ -809,6 +1116,81 @@ export default function ExcelFiles() {
                    </div>
                  )}
 
+                 {/* Admin File Sharing Section (for admins with permission) */}
+                 {currentUser?.role === 'admin' && currentUser?.canShareFiles && (
+                   <div>
+                     <label className="block text-sm font-medium text-gray-700 mb-2">
+                       Share with Other Admins (Optional)
+                     </label>
+                     {adminsLoading ? (
+                       <div className="text-blue-600 text-sm mb-2">
+                         Loading admins...
+                       </div>
+                     ) : adminsError ? (
+                       <div className="text-red-600 text-sm mb-2">
+                         Failed to load admins. Please try again.
+                       </div>
+                     ) : (
+                       <div className="space-y-2">
+                         <div className="max-h-32 overflow-y-auto border border-gray-300 rounded-md p-2">
+                           {(() => {
+                             // Filter admins based on allowedSharingAdmins if current user is an admin
+                             let filteredAdmins = admins.filter((admin: any) => admin._id !== currentUser._id);
+                             
+                             // If current user is an admin and has allowedSharingAdmins restriction, filter the list
+                             // Only filter if allowedSharingAdmins is defined and has items (empty array means no restrictions)
+                             if (currentUser?.role === 'admin' && currentUser?.allowedSharingAdmins !== undefined && Array.isArray(currentUser.allowedSharingAdmins) && currentUser.allowedSharingAdmins.length > 0) {
+                               const allowedIds = currentUser.allowedSharingAdmins.map((a: any) => {
+                                 if (typeof a === 'string') return a
+                                 if (typeof a === 'object' && a._id) return a._id
+                                 return String(a)
+                               });
+                               filteredAdmins = filteredAdmins.filter((admin: any) => allowedIds.includes(admin._id));
+                             }
+                             
+                             return filteredAdmins;
+                           })().map((admin: any) => (
+                             <label key={admin._id} className="flex items-center space-x-2 py-1">
+                               <input
+                                 type="checkbox"
+                                 checked={uploadForm.sharedAdmins.includes(admin._id)}
+                                 onChange={(e) => {
+                                   if (e.target.checked) {
+                                     setUploadForm(prev => ({
+                                       ...prev,
+                                       sharedAdmins: [...prev.sharedAdmins, admin._id]
+                                     }))
+                                   } else {
+                                     setUploadForm(prev => ({
+                                       ...prev,
+                                       sharedAdmins: prev.sharedAdmins.filter(id => id !== admin._id)
+                                     }))
+                                   }
+                                 }}
+                                 className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                               />
+                               <span className="text-sm text-gray-700">
+                                 {admin.name} ({admin.email})
+                               </span>
+                             </label>
+                           ))}
+                         </div>
+                         <p className="text-xs text-gray-500">
+                           Selected: {uploadForm.sharedAdmins.length} admin(s)
+                         </p>
+                         <p className="text-xs text-blue-600">
+                           Selected admins will have restricted access with masked file names.
+                         </p>
+                       </div>
+                     )}
+                     {admins.filter((admin: any) => admin._id !== currentUser._id).length === 0 && !adminsError && !adminsLoading && (
+                       <p className="text-sm text-gray-500 mt-1">
+                         No other admins available to share with.
+                       </p>
+                     )}
+                   </div>
+                 )}
+
                                  {/* Progress Indicator */}
                  {isUploading && (
                    <div className="pt-4 border-t-2 border-gray-400">
@@ -915,7 +1297,7 @@ export default function ExcelFiles() {
                   <div className="text-sm text-green-700">
                     <p className="font-medium">Total Access: {selectedSharingFile.assignedAdmins?.length || 0} admin(s)</p>
                     <p className="text-xs mt-1">
-                      💡 This file is accessible to all listed admins. SuperAdmin can modify these assignments.
+                      💡 Ask Superadmin for access management permission. SuperAdmin can modify these assignments.
                     </p>
                   </div>
                 </div>
@@ -932,6 +1314,120 @@ export default function ExcelFiles() {
                   Close
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Sharing Modal */}
+      {showEditSharingModal && selectedEditFile && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between p-4 border-b">
+              <h3 className="text-lg font-semibold text-gray-900">Edit Shared Admins</h3>
+              <button
+                onClick={() => {
+                  setShowEditSharingModal(false);
+                  setSelectedEditFile(null);
+                  setEditSharedAdmins([]);
+                }}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <XCircleIcon className="h-6 w-6" />
+              </button>
+            </div>
+            
+            <div className="p-4 space-y-4">
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                <h4 className="font-medium text-blue-900 mb-2">{getDisplayFileName(selectedEditFile)}</h4>
+                <div className="text-sm text-blue-700">
+                  <p>Update which admins have access to this file</p>
+                </div>
+              </div>
+              
+              {adminsLoading ? (
+                <div className="text-center py-4">Loading admins...</div>
+              ) : adminsError ? (
+                <div className="text-center py-4 text-red-600">Failed to load admins</div>
+              ) : admins.length === 0 ? (
+                <div className="text-center py-4 text-gray-500">No admins available</div>
+              ) : (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Select admins to share with:
+                  </label>
+                  <div className="border border-gray-300 rounded-lg p-3 max-h-60 overflow-y-auto">
+                    {(() => {
+                      // Filter admins based on allowedSharingAdmins if current user is an admin
+                      let filteredAdmins = admins.filter((admin: any) => admin._id !== currentUser?._id);
+                      
+                      // If current user is an admin and has allowedSharingAdmins restriction, filter the list
+                      // Only filter if allowedSharingAdmins is defined and has items (empty array means no restrictions)
+                      if (currentUser?.role === 'admin' && currentUser?.allowedSharingAdmins !== undefined && Array.isArray(currentUser.allowedSharingAdmins) && currentUser.allowedSharingAdmins.length > 0) {
+                        const allowedIds = currentUser.allowedSharingAdmins.map((a: any) => {
+                          if (typeof a === 'string') return a
+                          if (typeof a === 'object' && a._id) return a._id
+                          return String(a)
+                        });
+                        filteredAdmins = filteredAdmins.filter((admin: any) => allowedIds.includes(admin._id));
+                      }
+                      
+                      return filteredAdmins;
+                    })().map((admin: any) => (
+                        <label key={admin._id} className="flex items-center space-x-2 py-1">
+                          <input
+                            type="checkbox"
+                            checked={editSharedAdmins.includes(admin._id)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setEditSharedAdmins([...editSharedAdmins, admin._id]);
+                              } else {
+                                setEditSharedAdmins(editSharedAdmins.filter(id => id !== admin._id));
+                              }
+                            }}
+                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                          />
+                          <span className="text-sm text-gray-900">{admin.name}</span>
+                          <span className="text-xs text-gray-500">({admin.email})</span>
+                        </label>
+                      ))}
+                  </div>
+                  <p className="text-xs text-gray-500 mt-2">
+                    Selected: {editSharedAdmins.length} admin(s)
+                  </p>
+                  <p className="text-xs text-blue-600 mt-1">
+                    Selected admins will have restricted access with masked file names.
+                  </p>
+                </div>
+              )}
+            </div>
+            
+            <div className="flex justify-end gap-2 p-4 border-t">
+              <button
+                onClick={() => {
+                  setShowEditSharingModal(false);
+                  setSelectedEditFile(null);
+                  setEditSharedAdmins([]);
+                }}
+                className="btn-secondary"
+                disabled={updateSharedAdminsMutation.isPending}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (selectedEditFile) {
+                    updateSharedAdminsMutation.mutate({
+                      fileId: selectedEditFile._id,
+                      sharedAdmins: editSharedAdmins
+                    });
+                  }
+                }}
+                className="btn-primary"
+                disabled={updateSharedAdminsMutation.isPending || adminsLoading}
+              >
+                {updateSharedAdminsMutation.isPending ? 'Updating...' : 'Update Access'}
+              </button>
             </div>
           </div>
         </div>

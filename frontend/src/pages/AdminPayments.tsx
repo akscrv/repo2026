@@ -278,6 +278,12 @@ export default function AdminPayments() {
   };
 
   const handleGeneratePayments = (data: { month: number; year: number }) => {
+    if (!ratesData) {
+      toast.error('Please set payment rates first before generating payments');
+      setShowGenerateModal(false);
+      setShowRateModal(true);
+      return;
+    }
     generatePaymentsMutation.mutate(data);
   };
 
@@ -730,9 +736,9 @@ export default function AdminPayments() {
       {/* Generate Payments Modal */}
       {showGenerateModal && (
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+          <div className="relative top-20 mx-auto p-6 border w-full max-w-2xl shadow-xl rounded-lg bg-white">
             <div className="mt-3">
-              <h3 className="text-lg font-medium text-gray-900 mb-4">Generate Monthly Payments</h3>
+              <h3 className="text-2xl font-bold text-gray-900 mb-6">Generate Monthly Payments</h3>
               <form onSubmit={(e) => {
                 e.preventDefault();
                 const formData = new FormData(e.currentTarget);
@@ -741,54 +747,127 @@ export default function AdminPayments() {
                   year: parseInt(formData.get('year') as string)
                 });
               }}>
-                <div className="space-y-4">
-                  <div>
-                    <label htmlFor="month" className="block text-sm font-medium text-gray-700">
-                      Month
-                    </label>
-                    <select
-                      name="month"
-                      id="month"
-                      defaultValue={selectedMonth}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
-                      required
-                    >
-                      {Array.from({ length: 12 }, (_, i) => i + 1).map(month => (
-                        <option key={month} value={month}>
-                          {new Date(2024, month - 1).toLocaleDateString('en-US', { month: 'long' })}
-                        </option>
-                      ))}
-                    </select>
+                <div className="space-y-6">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label htmlFor="month" className="block text-sm font-semibold text-gray-700 mb-2">
+                        Month
+                      </label>
+                      <select
+                        name="month"
+                        id="month"
+                        defaultValue={selectedMonth}
+                        className="mt-1 block w-full border-2 border-gray-300 rounded-lg px-4 py-2.5 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-lg"
+                        required
+                      >
+                        {Array.from({ length: 12 }, (_, i) => i + 1).map(month => (
+                          <option key={month} value={month}>
+                            {new Date(2024, month - 1).toLocaleDateString('en-US', { month: 'long' })}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label htmlFor="year" className="block text-sm font-semibold text-gray-700 mb-2">
+                        Year
+                      </label>
+                      <select
+                        name="year"
+                        id="year"
+                        defaultValue={selectedYear}
+                        className="mt-1 block w-full border-2 border-gray-300 rounded-lg px-4 py-2.5 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-lg"
+                        required
+                      >
+                        {Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - 2 + i).map(year => (
+                          <option key={year} value={year}>{year}</option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
-                  <div>
-                    <label htmlFor="year" className="block text-sm font-medium text-gray-700">
-                      Year
-                    </label>
-                    <select
-                      name="year"
-                      id="year"
-                      defaultValue={selectedYear}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
-                      required
-                    >
-                      {Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - 2 + i).map(year => (
-                        <option key={year} value={year}>{year}</option>
-                      ))}
-                    </select>
+
+                  {/* Current Rates Display */}
+                  {!ratesData ? (
+                    <div className="bg-red-50 border-2 border-red-300 rounded-lg p-5">
+                      <div className="flex items-start">
+                        <ExclamationTriangleIcon className="h-6 w-6 text-red-500 mr-3 flex-shrink-0 mt-0.5" />
+                        <div className="flex-1">
+                          <h4 className="text-lg font-semibold text-red-800 mb-2">
+                            ⚠️ Payment Rates Not Set
+                          </h4>
+                          <p className="text-sm text-red-700 mb-4">
+                            You must set payment rates before generating payments. Payments cannot be generated without rates.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowGenerateModal(false);
+                              setShowRateModal(true);
+                            }}
+                            className="px-4 py-2 text-sm font-semibold text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors shadow-md"
+                          >
+                            Set Payment Rates Now
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-gradient-to-br from-green-50 to-emerald-50 border-2 border-green-300 rounded-lg p-5">
+                      <div className="flex items-center justify-between mb-4">
+                        <h4 className="text-lg font-semibold text-green-900 flex items-center">
+                          <CurrencyDollarIcon className="h-5 w-5 mr-2" />
+                          Current Payment Rates
+                        </h4>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowGenerateModal(false);
+                            setShowRateModal(true);
+                          }}
+                          className="px-3 py-1.5 text-xs font-semibold text-green-700 bg-white border-2 border-green-300 rounded-lg hover:bg-green-50 transition-colors"
+                        >
+                          Change Rates
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="bg-white p-4 rounded-lg border-2 border-blue-200 shadow-sm">
+                          <div className="flex items-center mb-2">
+                            <UsersIcon className="w-5 h-5 text-blue-600 mr-2" />
+                            <span className="text-sm font-semibold text-blue-900">Auditor Rate</span>
+                          </div>
+                          <p className="text-2xl font-bold text-blue-600">₹{ratesData.auditorRate}</p>
+                          <p className="text-xs text-gray-500 mt-1">per auditor / month</p>
+                        </div>
+                        <div className="bg-white p-4 rounded-lg border-2 border-green-200 shadow-sm">
+                          <div className="flex items-center mb-2">
+                            <UsersIcon className="w-5 h-5 text-green-600 mr-2" />
+                            <span className="text-sm font-semibold text-green-900">Field Agent Rate</span>
+                          </div>
+                          <p className="text-2xl font-bold text-green-600">₹{ratesData.fieldAgentRate}</p>
+                          <p className="text-xs text-gray-500 mt-1">per field agent / month</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                    <p className="text-sm text-blue-800">
+                      <strong>Note:</strong> This will generate payments for all users based on the selected month and year.
+                    </p>
                   </div>
                 </div>
-                <div className="flex justify-end space-x-3 mt-6">
+
+                <div className="flex justify-end space-x-3 mt-6 pt-4 border-t border-gray-200">
                   <button
                     type="button"
                     onClick={() => setShowGenerateModal(false)}
-                    className="btn btn-outline"
+                    className="px-6 py-2.5 text-sm font-semibold text-gray-700 bg-gray-100 border-2 border-gray-300 rounded-lg hover:bg-gray-200 transition-colors"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
-                    disabled={generatePaymentsMutation.isPending}
-                    className="btn btn-primary"
+                    disabled={generatePaymentsMutation.isPending || !ratesData}
+                    className="px-6 py-2.5 text-sm font-semibold text-white bg-gradient-to-r from-green-600 to-emerald-600 border border-transparent rounded-lg hover:from-green-700 hover:to-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-md"
                   >
                     {generatePaymentsMutation.isPending ? 'Generating...' : 'Generate Payments'}
                   </button>

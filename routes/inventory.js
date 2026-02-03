@@ -2,7 +2,10 @@ const express = require('express');
 const { authenticateToken, authorizeRole } = require('../middleware/auth');
 const Inventory = require('../models/Inventory');
 const User = require('../models/User');
-const ExcelVehicle = require('../models/ExcelVehicle');
+// ✅ PRODUCTION: ExcelVehicle removed - use VehicleLookup + GCS only
+const VehicleLookup = require('../models/VehicleLookup');
+const ExcelFile = require('../models/ExcelFile');
+const { searchVehiclesInExcel } = require('../services/excelCacheService');
 const puppeteer = require('puppeteer');
 
 
@@ -355,7 +358,9 @@ router.get('/field-agent', authenticateToken, authorizeRole('fieldAgent'), async
     const inventories = await Inventory.find({ 
       fieldAgentId: req.user._id 
     })
-    .populate('vehicleId', 'registration_number customer_name make chasis_number engine_number')
+    // Note: vehicleId references VehicleLookup, but all vehicle data is stored directly in Inventory
+    // Populate is optional since we already have registrationNumber, customerName, make, etc. stored
+    .populate('vehicleId', 'registrationNumber chassisNumber')
     .sort({ createdAt: -1 });
     
     res.json({
@@ -385,7 +390,9 @@ router.get('/admin', authenticateToken, authorizeRole('admin'), async (req, res)
     const inventories = await Inventory.find({ 
       fieldAgentId: { $in: fieldAgentIds }
     })
-    .populate('vehicleId', 'registration_number customer_name make chasis_number engine_number')
+    // Note: vehicleId references VehicleLookup, but all vehicle data is stored directly in Inventory
+    // Populate is optional since we already have registrationNumber, customerName, make, etc. stored
+    .populate('vehicleId', 'registrationNumber chassisNumber')
     .populate('fieldAgentId', 'name email')
     .sort({ createdAt: -1 });
     
@@ -426,7 +433,9 @@ router.get('/auditor', authenticateToken, authorizeRole('auditor'), async (req, 
     const inventories = await Inventory.find({ 
       fieldAgentId: { $in: fieldAgentIds }
     })
-    .populate('vehicleId', 'registration_number customer_name make chasis_number engine_number')
+    // Note: vehicleId references VehicleLookup, but all vehicle data is stored directly in Inventory
+    // Populate is optional since we already have registrationNumber, customerName, make, etc. stored
+    .populate('vehicleId', 'registrationNumber chassisNumber')
     .populate('fieldAgentId', 'name email')
     .populate('adminId', 'name')
     .sort({ createdAt: -1 });
@@ -485,14 +494,60 @@ router.post('/', authenticateToken, authorizeRole('fieldAgent'), async (req, res
       });
     }
 
-    // Get vehicle data
-    const vehicle = await ExcelVehicle.findById(vehicleId);
-    if (!vehicle) {
+    // ✅ PRODUCTION: Get vehicle data from VehicleLookup + GCS
+    const mongoose = require('mongoose');
+    
+    // Validate ObjectId
+    if (!mongoose.Types.ObjectId.isValid(vehicleId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid vehicle ID'
+      });
+    }
+
+    // Find the lookup
+    const lookup = await VehicleLookup.findById(vehicleId).lean();
+    if (!lookup) {
       return res.status(404).json({
         success: false,
         message: 'Vehicle not found'
       });
     }
+
+    // Get Excel file to access GCS URL
+    const excelFile = await ExcelFile.findById(lookup.excelFileId)
+      .select('filePath')
+      .lean();
+
+    if (!excelFile || !excelFile.filePath) {
+      return res.status(404).json({
+        success: false,
+        message: 'Vehicle data file not found'
+      });
+    }
+
+    // Check if GCS is configured
+    const gcsFileUrl = excelFile.filePath;
+    if (!gcsFileUrl || (!gcsFileUrl.includes('storage.googleapis.com') && !gcsFileUrl.includes('gcs'))) {
+      return res.status(404).json({
+        success: false,
+        message: 'Vehicle data not available (GCS not configured)'
+      });
+    }
+
+    // Fetch vehicle data from GCS (ONE file, ONE row)
+    const vehicleDataArray = await searchVehiclesInExcel(gcsFileUrl, [lookup]);
+    const vehicleData = vehicleDataArray[0];
+
+    if (!vehicleData) {
+      return res.status(404).json({
+        success: false,
+        message: 'Vehicle details not found in Excel file'
+      });
+    }
+
+    // Use vehicleData for inventory creation
+    const vehicle = vehicleData;
 
     // Get field agent's admin
     const fieldAgent = await User.findById(req.user._id).populate('createdBy');
@@ -567,7 +622,9 @@ router.get('/:id', authenticateToken, authorizeRole('fieldAgent', 'admin', 'audi
     const { id } = req.params;
     
     const inventory = await Inventory.findById(id)
-      .populate('vehicleId', 'registration_number customer_name make chasis_number engine_number')
+      // Note: vehicleId references VehicleLookup, but all vehicle data is stored directly in Inventory
+    // Populate is optional since we already have registrationNumber, customerName, make, etc. stored
+    .populate('vehicleId', 'registrationNumber chassisNumber')
       .populate('fieldAgentId', 'name email')
       .populate('adminId', 'name');
     
@@ -621,7 +678,9 @@ router.get('/:id/download', authenticateToken, authorizeRole('fieldAgent', 'admi
     const { id } = req.params;
     
     const inventory = await Inventory.findById(id)
-      .populate('vehicleId', 'registration_number customer_name make chasis_number engine_number')
+      // Note: vehicleId references VehicleLookup, but all vehicle data is stored directly in Inventory
+    // Populate is optional since we already have registrationNumber, customerName, make, etc. stored
+    .populate('vehicleId', 'registrationNumber chassisNumber')
       .populate('fieldAgentId', 'name email')
       .populate('adminId', 'name');
     

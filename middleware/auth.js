@@ -107,10 +107,28 @@ const authorizeRole = (...roles) => {
       });
     }
 
-    if (!roles.includes(req.user.role)) {
+    // Debug logging
+    const userRole = req.user.role;
+    const hasAccess = roles.includes(userRole);
+    
+    console.log('🔐 Authorization check:', {
+      userRole: userRole,
+      userRoleType: typeof userRole,
+      userRoleLength: userRole ? userRole.length : 0,
+      requiredRoles: roles,
+      hasAccess: hasAccess,
+      route: req.path || req.url
+    });
+
+    if (!hasAccess) {
+      console.error('❌ Access denied for role:', userRole, 'Required:', roles);
       return res.status(403).json({
         success: false,
-        message: 'Access denied. Insufficient permissions.'
+        message: 'Access denied. Insufficient permissions.',
+        debug: process.env.NODE_ENV === 'development' ? {
+          userRole: userRole,
+          requiredRoles: roles
+        } : undefined
       });
     }
 

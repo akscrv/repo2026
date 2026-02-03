@@ -20,6 +20,12 @@ interface User {
     name: string
     email: string
   }
+  canShareFiles?: boolean
+  allowedSharingAdmins?: Array<{
+    _id: string
+    name: string
+    email: string
+  }>
 }
 
 interface AuthContextType {
@@ -30,6 +36,7 @@ interface AuthContextType {
   logout: () => Promise<void>
   forceLogout: () => Promise<void>
   updateProfile: (data: any) => Promise<void>
+  refreshUser: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)

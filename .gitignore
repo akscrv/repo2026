@@ -321,6 +321,12 @@ Thumbs.db
 secrets.json
 config/secrets.json
 
+# Google Cloud Storage credentials
+gcs-key.json
+*-gcs-key.json
+*.gcs-key.json
+gcs-credentials.json
+
 # Testing
 coverage/
 .nyc_output/

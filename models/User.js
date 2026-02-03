@@ -134,7 +134,26 @@ const userSchema = new mongoose.Schema({
       default: 0,
       min: 0
     }
-  }
+  },
+  // Admin file sharing permission (requires super admin approval)
+  canShareFiles: {
+    type: Boolean,
+    default: false
+  },
+  sharingPermissionApprovedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
+  sharingPermissionApprovedAt: {
+    type: Date,
+    default: null
+  },
+  // List of admin IDs that this admin is allowed to share files with (set by Super Admin)
+  allowedSharingAdmins: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }]
 }, {
   timestamps: true
 });
@@ -150,12 +169,15 @@ userSchema.index({
 
 // Encrypt password using bcrypt
 userSchema.pre('save', async function(next) {
+  // Only hash password if it's been modified (not if it's already hashed)
   if (!this.isModified('password')) {
-    next();
+    return next(); // Return early if password hasn't changed
   }
 
+  // Hash the password before saving
   const salt = await bcrypt.genSalt(parseInt(process.env.BCRYPT_SALT_ROUNDS) || 12);
   this.password = await bcrypt.hash(this.password, salt);
+  next(); // Call next() after hashing
 });
 
 // Generate a unique session token

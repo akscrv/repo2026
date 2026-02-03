@@ -296,15 +296,24 @@ const SuperAdminMyPayments: React.FC = () => {
                       {payment.paymentPeriod}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex items-center">
-                        <UserGroupIcon className="w-4 h-4 text-gray-400 mr-1" />
-                        <span className="text-sm text-gray-900">
-                          {payment.userCount}
-                          {payment.deletedUserCount && payment.deletedUserCount > 0 && (
-                            <span className="text-red-500"> ({payment.deletedUserCount} deleted)</span>
-                          )}
-                        </span>
-                      </div>
+                    <div className="flex items-center gap-2">
+  <UserGroupIcon className="w-4 h-4 text-gray-400" />
+
+  {/* Total Users */}
+  <span className="text-sm text-gray-900 font-medium">
+    {payment.userCount}
+  </span>
+
+  {/* Deleted Users – always visible */}
+  <span
+    className={`text-sm ${
+      payment.deletedUserCount > 0 ? 'text-red-500' : 'text-gray-400'
+    }`}
+  >
+    ({payment.deletedUserCount ?? 0} deleted)
+  </span>
+</div>
+
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm text-gray-900">₹{payment.totalAmount}</div>

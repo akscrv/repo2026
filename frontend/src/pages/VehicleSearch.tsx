@@ -44,8 +44,14 @@ export default function VehicleSearch() {
   const [vehicleSearch, setVehicleSearch] = useState('')
   const [searchType, setSearchType] = useState('registration_number') // Default to registration number
   const [vehiclePage, setVehiclePage] = useState(1)
+  // Optimized Indian registration number search
+  const [stateCode, setStateCode] = useState('')
+  const [lastFourDigits, setLastFourDigits] = useState('')
+  // Track previous search to conditionally keep data only for pagination
+  const [previousSearchKey, setPreviousSearchKey] = useState<string>('')
   const [selectedVehicle, setSelectedVehicle] = useState<any>(null)
   const [showDetailsModal, setShowDetailsModal] = useState(false)
+  const [isLoadingDetails, setIsLoadingDetails] = useState(false)
   const [showInventoryModal, setShowInventoryModal] = useState(false)
   const [selectedVehicleForInventory, setSelectedVehicleForInventory] = useState<any>(null)
   const [inventoryFormData, setInventoryFormData] = useState({
@@ -77,29 +83,91 @@ export default function VehicleSearch() {
     otherSpecificItems: ''
   })
   const [isCreatingInventory, setIsCreatingInventory] = useState(false)
+  const [isPreCaching, setIsPreCaching] = useState(false)
+  const [preCacheStatus, setPreCacheStatus] = useState<{ message?: string; results?: any } | null>(null)
+  const [showCacheDetailsModal, setShowCacheDetailsModal] = useState(false)
+  const [cacheDetails, setCacheDetails] = useState<any>(null)
+  const [isLoadingCacheDetails, setIsLoadingCacheDetails] = useState(false)
 
-  // Debounced search for better performance (reduces API calls by 80%)
-  const debouncedSearch = useDebounce(vehicleSearch, 300); // 300ms delay
+  // Faster debouncing for optimized search (state code + last 4 digits)
+  // When using optimized search, reduce debounce time significantly
+  const isOptimizedSearch = searchType === 'registration_number' && (stateCode || lastFourDigits);
+  const debounceDelay = isOptimizedSearch ? 150 : 300; // 150ms for optimized, 300ms for regular
+  const debouncedSearch = useDebounce(vehicleSearch, debounceDelay);
+  
+  // Also debounce lastFourDigits separately for real-time search
+  const debouncedLastFour = useDebounce(lastFourDigits, 100); // Very fast for last 4 digits
+
+  // Create a search key that excludes page number (for detecting search term changes)
+  const searchKey = `${debouncedSearch}-${searchType}-${stateCode}-${debouncedLastFour}`
+  const isSearchTermChanged = searchKey !== previousSearchKey
+  
+  // Update previous search key when search term changes (not page)
+  useEffect(() => {
+    if (isSearchTermChanged && debouncedSearch.trim().length >= 3) {
+      setPreviousSearchKey(searchKey)
+      // Reset to page 1 when search term changes
+      if (vehiclePage !== 1) {
+        setVehiclePage(1)
+      }
+    }
+  }, [searchKey, isSearchTermChanged, debouncedSearch, vehiclePage])
 
   // LIGHTNING-FAST search query with proper loading states
-  const { data: vehiclesData, isLoading: vehiclesLoading, isFetching, isPreviousData } = useQuery({
-    queryKey: ['excel-vehicles-fast', { search: debouncedSearch, searchType, page: vehiclePage }],
-    queryFn: () => excelAPI.searchVehicles({ 
-      search: debouncedSearch,
-      searchType: searchType,
-      page: vehiclePage, 
-      limit: 25 // Slightly increased for better UX
-    }),
-    enabled: debouncedSearch.trim().length >= 3, // Reduced to 3 characters
+  // Include debouncedLastFour in query key for real-time updates
+  const { data: vehiclesData, isLoading: vehiclesLoading, isFetching, isPreviousData, error: vehiclesError } = useQuery({
+    queryKey: ['excel-vehicles-fast', { 
+      search: debouncedSearch, 
+      searchType, 
+      stateCode, 
+      lastFourDigits: debouncedLastFour, // Use debounced value
+      page: vehiclePage 
+    }],
+    queryFn: () => {
+      const params: any = { 
+        search: searchType === 'registration_number' && (stateCode || lastFourDigits) 
+          ? (lastFourDigits || debouncedSearch) 
+          : debouncedSearch,
+        searchType: searchType,
+        page: vehiclePage, 
+        limit: 25
+      };
+      // Add optimized search params for registration number
+      if (searchType === 'registration_number') {
+        if (stateCode) params.stateCode = stateCode;
+        if (lastFourDigits) params.lastFourDigits = lastFourDigits;
+      }
+      return excelAPI.searchVehicles(params);
+    },
+    enabled: searchType === 'registration_number' && (stateCode || lastFourDigits) 
+      ? (debouncedLastFour.length >= 1 || debouncedSearch.trim().length >= 3) // Start searching with first digit
+      : debouncedSearch.trim().length >= 3, // Reduced to 3 characters for other search types
     staleTime: 30000, // 30 seconds - matches backend cache
     cacheTime: 60000, // 1 minute - shorter for fresh uploads
-    keepPreviousData: true, // Smooth pagination but show loading
+    // Only keep previous data when pagination changes (page number), not when search term changes
+    keepPreviousData: !isSearchTermChanged, // Don't keep old data when search term changes
     refetchOnWindowFocus: false, // Don't refetch on focus
     retry: 1, // Reduce retry attempts for speed
+    onError: (error: any) => {
+      // Handle storage quota errors
+      if (error.response?.status === 507) {
+        toast.error(
+          'Storage quota exceeded. Please contact administrator.',
+          { duration: 5000 }
+        )
+      }
+      // Handle other search errors silently (user can see empty results)
+      else if (error.response?.status !== 400) {
+        console.error('Search error:', error)
+      }
+    }
   })
 
   const vehicles = vehiclesData?.data?.data || []
   const vehiclePagination = vehiclesData?.data?.pagination
+  
+  // Clear pagination when search term changes to prevent showing stale counts
+  const displayPagination = isSearchTermChanged && isFetching ? null : vehiclePagination
 
   // Get back office numbers for field agents
   const { data: backOfficeNumbers } = useQuery({
@@ -111,22 +179,54 @@ export default function VehicleSearch() {
     enabled: currentUser?.role === 'fieldAgent',
   });
 
+  const loadCacheDetails = async () => {
+    setIsLoadingCacheDetails(true);
+    try {
+      const response = await excelAPI.getCacheDetails();
+      setCacheDetails(response.data.cache);
+      setShowCacheDetailsModal(true);
+    } catch (error: any) {
+      console.error('Cache details error:', error);
+      toast.error(error.response?.data?.message || 'Failed to load cache details');
+    } finally {
+      setIsLoadingCacheDetails(false);
+    }
+  }
+
   const handleViewDetails = async (vehicle: any) => {
+    // Show modal immediately with minimal data (Phase 1)
     setSelectedVehicle(vehicle)
     setShowDetailsModal(true)
+    setIsLoadingDetails(true)
     
-    // Log notification if user is field agent or auditor
-    if (currentUser?.role === 'fieldAgent' || currentUser?.role === 'auditor') {
-      try {
-        await notificationsAPI.logAction({
-          vehicleNumber: vehicle.registration_number || vehicle.loan_number || 'Unknown',
-          action: 'viewed',
-          vehicleId: vehicle._id
-        })
-      } catch (error) {
-        console.log('Failed to log notification:', error)
-        // Don't show error to user as this is a background operation
+    // Fetch full details from Phase 2 endpoint
+    try {
+      const response = await excelAPI.getVehicleDetails(vehicle._id)
+      const fullDetails = response.data.data
+      
+      // Update selected vehicle with full details (respects data restrictions from backend)
+      setSelectedVehicle(fullDetails)
+      
+      // Log notification if user is field agent, auditor, or admin
+      if (currentUser?.role === 'fieldAgent' || currentUser?.role === 'auditor' || currentUser?.role === 'admin') {
+        try {
+          await notificationsAPI.logAction({
+            vehicleNumber: fullDetails.registration_number || fullDetails.loan_number || 'Unknown',
+            action: currentUser?.role === 'admin' ? 'searched' : 'viewed',
+            vehicleId: fullDetails._id,
+            excelFileId: fullDetails.excel_file?._id
+          })
+        } catch (error) {
+          console.log('Failed to log notification:', error)
+          // Don't show error to user as this is a background operation
+        }
       }
+    } catch (error: any) {
+      console.error('Failed to fetch vehicle details:', error)
+      toast.error(error.response?.data?.message || 'Failed to load vehicle details')
+      // Keep the modal open with minimal data if details fetch fails
+    } finally {
+      setIsLoadingDetails(false)
     }
   }
 
@@ -348,36 +448,133 @@ export default function VehicleSearch() {
                 </label>
                 <select
                   value={searchType}
-                  onChange={(e) => setSearchType(e.target.value)}
+                  onChange={(e) => {
+                    setSearchType(e.target.value);
+                    // Reset optimized search fields when changing search type
+                    if (e.target.value !== 'registration_number') {
+                      setStateCode('');
+                      setLastFourDigits('');
+                    }
+                  }}
                   className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 bg-white shadow-sm"
                 >
                   <option value="all">🔍 All Fields</option>
                   <option value="registration_number">🚗 Registration Number</option>
                   <option value="chasis_number">🔧 Chassis Number</option>
-                  <option value="engine_number">⚙️ Engine Number</option>
                 </select>
               </div>
               
-              {/* Search Input */}
-              <div className="lg:col-span-2">
-                <label className="block text-sm font-semibold text-gray-700 mb-2">
-                  Search Term {debouncedSearch !== vehicleSearch && '(typing...)'}
-                </label>
-                <div className="relative">
-                  <MagnifyingGlassIcon className="absolute left-4 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
-                  <input
-                    type="text"
-                    placeholder={
-                      searchType === 'all' 
-                        ? "🔍 Search anywhere in registration, chassis, or engine number..."
-                        : `🔍 Search anywhere in ${searchType.replace('_', ' ')}...`
-                    }
-                    value={vehicleSearch}
-                    onChange={(e) => setVehicleSearch(e.target.value)}
-                    className="w-full pl-12 pr-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 text-base shadow-sm"
-                  />
+              {/* Search Input - Optimized for Registration Number */}
+              {searchType === 'registration_number' ? (
+                <div className="lg:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {/* State Code Selector */}
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      State Code
+                    </label>
+                    <select
+                      value={stateCode}
+                      onChange={(e) => {
+                        setStateCode(e.target.value);
+                        setVehiclePage(1);
+                        // Trigger search immediately when state code is selected
+                        // If last 4 digits already entered, trigger search right away
+                        if (e.target.value && lastFourDigits) {
+                          setVehicleSearch(lastFourDigits);
+                        } else if (!e.target.value) {
+                          setVehicleSearch(lastFourDigits || '');
+                        }
+                        // Search will trigger automatically via useQuery when stateCode changes
+                      }}
+                      className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 bg-white shadow-sm"
+                    >
+                      <option value="">All States</option>
+                      <option value="AP">AP - Andhra Pradesh</option>
+                      <option value="AR">AR - Arunachal Pradesh</option>
+                      <option value="AS">AS - Assam</option>
+                      <option value="BR">BR - Bihar</option>
+                      <option value="CG">CG - Chhattisgarh</option>
+                      <option value="DL">DL - Delhi</option>
+                      <option value="GA">GA - Goa</option>
+                      <option value="GJ">GJ - Gujarat</option>
+                      <option value="HR">HR - Haryana</option>
+                      <option value="HP">HP - Himachal Pradesh</option>
+                      <option value="JK">JK - Jammu & Kashmir</option>
+                      <option value="JH">JH - Jharkhand</option>
+                      <option value="KA">KA - Karnataka</option>
+                      <option value="KL">KL - Kerala</option>
+                      <option value="MP">MP - Madhya Pradesh</option>
+                      <option value="MH">MH - Maharashtra</option>
+                      <option value="MN">MN - Manipur</option>
+                      <option value="ML">ML - Meghalaya</option>
+                      <option value="MZ">MZ - Mizoram</option>
+                      <option value="NL">NL - Nagaland</option>
+                      <option value="OR">OR - Odisha</option>
+                      <option value="PB">PB - Punjab</option>
+                      <option value="RJ">RJ - Rajasthan</option>
+                      <option value="SK">SK - Sikkim</option>
+                      <option value="TN">TN - Tamil Nadu</option>
+                      <option value="TS">TS - Telangana</option>
+                      <option value="TR">TR - Tripura</option>
+                      <option value="UP">UP - Uttar Pradesh</option>
+                      <option value="UK">UK - Uttarakhand</option>
+                      <option value="WB">WB - West Bengal</option>
+                      <option value="BH">BH - Bharat (All India)</option>
+                    </select>
+                  </div>
+                  
+                  {/* Last 4 Digits Input */}
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      Last 4 Digits {debouncedSearch !== vehicleSearch && '(typing...)'}
+                    </label>
+                    <div className="relative">
+                      <MagnifyingGlassIcon className="absolute left-4 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
+                      <input
+                        type="text"
+                        placeholder="Enter last 4 digits (e.g., 1614)"
+                        value={lastFourDigits}
+                        maxLength={4}
+                        onChange={(e) => {
+                          const value = e.target.value.replace(/\D/g, ''); // Only numbers
+                          setLastFourDigits(value);
+                          setVehiclePage(1);
+                          if (value) {
+                            setVehicleSearch(value);
+                          } else {
+                            setVehicleSearch('');
+                          }
+                        }}
+                        className="w-full pl-12 pr-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 text-base shadow-sm font-mono text-lg"
+                      />
+                    </div>
+                  </div>
                 </div>
-              </div>
+              ) : (
+                /* Regular Search Input for other search types */
+                <div className="lg:col-span-2">
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Search Term {debouncedSearch !== vehicleSearch && '(typing...)'}
+                  </label>
+                  <div className="relative">
+                    <MagnifyingGlassIcon className="absolute left-4 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
+                    <input
+                      type="text"
+                      placeholder={
+                        searchType === 'all' 
+                          ? "🔍 Search anywhere in registration, chassis, or engine number..."
+                          : `🔍 Search anywhere in ${searchType.replace('_', ' ')}...`
+                      }
+                      value={vehicleSearch}
+                      onChange={(e) => {
+                        setVehicleSearch(e.target.value);
+                        setVehiclePage(1);
+                      }}
+                      className="w-full pl-12 pr-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 text-base shadow-sm"
+                    />
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Action Buttons */}
@@ -390,6 +587,8 @@ export default function VehicleSearch() {
                     setVehicleSearch('');
                     setVehiclePage(1);
                     setSearchType('registration_number');
+                    setStateCode('');
+                    setLastFourDigits('');
                   }}
                     className="flex items-center space-x-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-all duration-200"
                   >
@@ -427,9 +626,97 @@ export default function VehicleSearch() {
               </div>
             </div>
 
+            {/* Pre-cache Button */}
+            <div className="mt-4 mb-4">
+              <div className="flex gap-2">
+                <button
+                  onClick={async () => {
+                    setIsPreCaching(true);
+                    setPreCacheStatus(null);
+                    try {
+                      const response = await excelAPI.preCacheFiles();
+                      setPreCacheStatus({
+                        message: response.data.message,
+                        results: response.data.results
+                      });
+                      toast.success(`Pre-cached ${response.data.results.cached} files! Searches will be much faster now.`);
+                      // Auto-show cache details after caching
+                      await loadCacheDetails();
+                    } catch (error: any) {
+                      console.error('Pre-cache error:', error);
+                      toast.error(error.response?.data?.message || 'Failed to pre-cache files');
+                      setPreCacheStatus({
+                        message: 'Failed to pre-cache files',
+                        results: null
+                      });
+                    } finally {
+                      setIsPreCaching(false);
+                    }
+                  }}
+                  disabled={isPreCaching}
+                  className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 disabled:from-gray-400 disabled:to-gray-500 disabled:cursor-not-allowed transition-all duration-200 shadow-md hover:shadow-lg"
+                >
+                  {isPreCaching ? (
+                    <>
+                      <ClockIcon className="h-5 w-5 animate-spin" />
+                      <span>Pre-caching Files...</span>
+                    </>
+                  ) : (
+                    <>
+                      <SparklesIcon className="h-5 w-5" />
+                      <span>Pre-cache Files for Faster Search</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  onClick={async () => {
+                    await loadCacheDetails();
+                  }}
+                  disabled={isLoadingCacheDetails}
+                  className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-lg hover:from-green-700 hover:to-emerald-700 disabled:from-gray-400 disabled:to-gray-500 disabled:cursor-not-allowed transition-all duration-200 shadow-md hover:shadow-lg"
+                >
+                  {isLoadingCacheDetails ? (
+                    <>
+                      <ClockIcon className="h-5 w-5 animate-spin" />
+                      <span>Loading...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CogIcon className="h-5 w-5" />
+                      <span>Show Cache Details</span>
+                    </>
+                  )}
+                </button>
+              </div>
+              
+              {preCacheStatus && preCacheStatus.results && (
+                <div className="mt-2 text-sm text-gray-600">
+                  <span className="font-semibold">Status:</span> Cached: <span className="text-green-600">{preCacheStatus.results.cached}</span>, 
+                  Already cached: <span className="text-blue-600">{preCacheStatus.results.skipped}</span>, 
+                  Errors: <span className="text-red-600">{preCacheStatus.results.errors.length}</span>
+                </div>
+              )}
+            </div>
+
             {/* Search Feedback */}
             <div className="mt-4">
-              {vehicleSearch && vehicleSearch.trim().length < 3 && (
+              {searchType === 'registration_number' && stateCode && lastFourDigits && lastFourDigits.length >= 1 && (
+                <div className="flex items-center space-x-2 p-3 bg-green-50 border border-green-200 rounded-lg">
+                  <BoltIcon className="h-4 w-4 text-green-500" />
+                  <p className="text-sm text-green-700">
+                    ⚡ Using optimized search: State <strong>{stateCode}</strong> + Last 4 digits <strong>{lastFourDigits}</strong> (Ultra Fast!)
+                  </p>
+                </div>
+              )}
+              {searchType === 'registration_number' && !stateCode && !lastFourDigits && vehicleSearch && vehicleSearch.trim().length < 3 && (
+                <div className="flex items-center space-x-2 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                  <BoltIcon className="h-4 w-4 text-blue-500" />
+                  <p className="text-sm text-blue-700">
+                    💡 Tip: Select state code and enter last 4 digits for fastest search!
+                  </p>
+                </div>
+              )}
+              {searchType !== 'registration_number' && vehicleSearch && vehicleSearch.trim().length < 3 && (
                 <div className="flex items-center space-x-2 p-3 bg-orange-50 border border-orange-200 rounded-lg">
                   <BoltIcon className="h-4 w-4 text-orange-500" />
                   <p className="text-sm text-orange-700">
@@ -475,21 +762,25 @@ export default function VehicleSearch() {
                 </div>
                                <div>
                  <p className="text-lg font-semibold text-gray-900">
-                   Found <span className="text-blue-600">{vehiclePagination?.total || vehicles.length}</span> vehicles
+                   Found <span className="text-blue-600">{displayPagination?.total ?? (vehicles.length > 0 ? vehicles.length : '...')}</span> vehicles
                  </p>
                  <div className="flex items-center space-x-2 mt-1">
                    <span className="text-xs text-gray-500">Sorted alphabetically by registration number</span>
                    <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">A-Z</span>
                  </div>
-                 {vehiclePagination && vehiclePagination.pages > 1 && (
+                 {displayPagination && displayPagination.pages > 1 && (
                    <p className="text-sm text-gray-600">
-                     Page {vehiclePage} of {vehiclePagination.pages}
+                     Page {vehiclePage} of {displayPagination.pages}
                    </p>
                  )}
                </div>
               </div>
               <div className="text-sm text-gray-500">
-                Showing {((vehiclePage - 1) * 20) + 1} - {Math.min(vehiclePage * 20, vehiclePagination?.total || vehicles.length)} of {vehiclePagination?.total || vehicles.length}
+                {displayPagination ? (
+                  <>Showing {((vehiclePage - 1) * 20) + 1} - {Math.min(vehiclePage * 20, displayPagination.total)} of {displayPagination.total}</>
+                ) : (
+                  <>Searching...</>
+                )}
               </div>
             </div>
           </div>
@@ -550,13 +841,11 @@ export default function VehicleSearch() {
                         {/* Data Type Label */}
                         {vehicle.dataType && (
                           <div className="mb-4">
-                                                         <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${
-                               vehicle.dataType === 'SUPER ADMIN DATA' 
-                                 ? 'bg-purple-100 text-purple-800 border border-purple-200' 
-                                 : vehicle.dataType.includes(' DATA') && vehicle.dataType !== 'SELF DATA'
-                                 ? 'bg-orange-100 text-orange-800 border border-orange-200'
-                                 : 'bg-blue-100 text-blue-800 border border-blue-200'
-                             }`}>
+                            <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${
+                              vehicle.dataType === 'SELF DATA'
+                                ? 'bg-blue-100 text-blue-800 border border-blue-200'
+                                : 'bg-purple-100 text-purple-800 border border-purple-200'
+                            }`}>
                               <SparklesIcon className="w-3 h-3 mr-1" />
                               {vehicle.dataType}
                             </span>
@@ -634,7 +923,7 @@ export default function VehicleSearch() {
         </div>
 
         {/* Vehicle Pagination */}
-        {vehicleSearch.trim().length >= 3 && vehiclePagination && vehiclePagination.pages > 1 && (
+        {vehicleSearch.trim().length >= 3 && displayPagination && displayPagination.pages > 1 && (
           <div className="mt-8 flex justify-center">
             <nav className="flex items-center space-x-2 bg-white rounded-xl shadow-lg border border-gray-200 p-2">
               {/* Previous Page */}
@@ -664,10 +953,10 @@ export default function VehicleSearch() {
               )}
               
               {/* Page Numbers around current page */}
-              {Array.from({ length: vehiclePagination.pages }, (_, i) => i + 1)
+              {Array.from({ length: displayPagination.pages }, (_, i) => i + 1)
                 .filter(pageNum => 
                   pageNum === 1 || 
-                  pageNum === vehiclePagination.pages || 
+                  pageNum === displayPagination.pages || 
                   (pageNum >= vehiclePage - 1 && pageNum <= vehiclePage + 1)
                 )
                 .map((pageNum, index, array) => (
@@ -689,22 +978,22 @@ export default function VehicleSearch() {
                 ))}
               
               {/* Last Page */}
-              {vehiclePage < vehiclePagination.pages - 2 && (
+              {vehiclePage < displayPagination.pages - 2 && (
                 <>
-                  {vehiclePage < vehiclePagination.pages - 3 && (
+                  {vehiclePage < displayPagination.pages - 3 && (
                     <span className="px-2 text-gray-500">...</span>
                   )}
                   <button
-                    onClick={() => setVehiclePage(vehiclePagination.pages)}
+                    onClick={() => setVehiclePage(displayPagination.pages)}
                     className="px-3 py-2 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-all duration-200"
                   >
-                    {vehiclePagination.pages}
+                    {displayPagination.pages}
                   </button>
                 </>
               )}
               
               {/* Next Page */}
-              {vehiclePage < vehiclePagination.pages && (
+              {vehiclePage < displayPagination.pages && (
                 <button
                   onClick={() => setVehiclePage(vehiclePage + 1)}
                   className="flex items-center space-x-2 px-4 py-2 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-all duration-200"
@@ -734,24 +1023,39 @@ export default function VehicleSearch() {
                   </div>
                 </div>
                 <button
-                  onClick={() => setShowDetailsModal(false)}
+                  onClick={() => {
+                    setShowDetailsModal(false)
+                    setSelectedVehicle(null)
+                    setIsLoadingDetails(false)
+                  }}
                   className="flex items-center justify-center w-10 h-10 bg-gray-100 hover:bg-gray-200 rounded-lg transition-all duration-200"
                 >
                   <XMarkIcon className="h-6 w-6 text-gray-600" />
                 </button>
               </div>
-              
-              <div className="max-h-96 overflow-y-auto">
+
+              {/* Loading indicator */}
+              {isLoadingDetails && (
+                <div className="flex items-center justify-center py-12">
+                  <div className="flex flex-col items-center space-y-4">
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+                    <p className="text-sm text-gray-600">Loading full details...</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Details content - only show when not loading */}
+              {!isLoadingDetails && (
+                <>
+                  <div className="max-h-96 overflow-y-auto">
                 {/* Data Type Label */}
                 {selectedVehicle.dataType && (
                   <div className="mb-6 text-center">
-                                         <span className={`inline-flex items-center px-4 py-2 rounded-full text-sm font-semibold ${
-                       selectedVehicle.dataType === 'SUPER ADMIN DATA' 
-                         ? 'bg-purple-100 text-purple-800 border border-purple-200' 
-                         : selectedVehicle.dataType.includes(' DATA') && selectedVehicle.dataType !== 'SELF DATA'
-                         ? 'bg-orange-100 text-orange-800 border border-orange-200'
-                         : 'bg-blue-100 text-blue-800 border border-blue-200'
-                     }`}>
+                    <span className={`inline-flex items-center px-4 py-2 rounded-full text-sm font-semibold ${
+                      selectedVehicle.dataType === 'SELF DATA'
+                        ? 'bg-blue-100 text-blue-800 border border-blue-200'
+                        : 'bg-purple-100 text-purple-800 border border-purple-200'
+                    }`}>
                       <SparklesIcon className="w-4 h-4 mr-2" />
                       {selectedVehicle.dataType}
                     </span>
@@ -1045,16 +1349,22 @@ export default function VehicleSearch() {
                     )}
                   </div>
                 )}
-              </div>
+                  </div>
 
-              <div className="flex justify-end mt-8 pt-6 border-t border-gray-200">
+                  <div className="flex justify-end mt-8 pt-6 border-t border-gray-200">
                 <button
-                  onClick={() => setShowDetailsModal(false)}
+                  onClick={() => {
+                    setShowDetailsModal(false)
+                    setSelectedVehicle(null)
+                    setIsLoadingDetails(false)
+                  }}
                   className="px-6 py-3 bg-gradient-to-r from-gray-600 to-gray-700 hover:from-gray-700 hover:to-gray-800 text-white rounded-lg transition-all duration-200 shadow-lg hover:shadow-xl"
                 >
                   Close
                 </button>
               </div>
+                </>
+              )}
             </div>
           </div>
         )}
@@ -1424,6 +1734,121 @@ export default function VehicleSearch() {
                     <span>Create Inventory</span>
                   </>
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cache Details Modal */}
+      {showCacheDetailsModal && cacheDetails && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-10 mx-auto p-5 border w-11/12 max-w-4xl shadow-2xl rounded-2xl bg-white">
+            <div className="flex justify-between items-center mb-6">
+              <div className="flex items-center space-x-3">
+                <div className="flex items-center justify-center w-12 h-12 bg-gradient-to-r from-green-600 to-emerald-600 rounded-xl">
+                  <SparklesIcon className="w-6 h-6 text-white" />
+                </div>
+                <div>
+                  <h3 className="text-2xl font-bold text-gray-900">Cache Details</h3>
+                  <p className="text-gray-600">Pre-cached files and memory usage</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowCacheDetailsModal(false)}
+                className="flex items-center justify-center w-10 h-10 bg-gray-100 hover:bg-gray-200 rounded-lg transition-all duration-200"
+              >
+                <XMarkIcon className="h-6 w-6 text-gray-600" />
+              </button>
+            </div>
+            
+            <div className="max-h-96 overflow-y-auto">
+              {/* Summary Stats */}
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
+                  <p className="text-sm font-semibold text-blue-800 mb-1">Total Files</p>
+                  <p className="text-2xl font-bold text-blue-900">{cacheDetails.totalFiles}</p>
+                </div>
+                <div className="bg-green-50 rounded-lg p-4 border border-green-200">
+                  <p className="text-sm font-semibold text-green-800 mb-1">Total Rows</p>
+                  <p className="text-2xl font-bold text-green-900">{cacheDetails.totalRows.toLocaleString()}</p>
+                </div>
+                <div className="bg-purple-50 rounded-lg p-4 border border-purple-200">
+                  <p className="text-sm font-semibold text-purple-800 mb-1">Total Size</p>
+                  <p className="text-2xl font-bold text-purple-900">{cacheDetails.totalSizeMB} MB</p>
+                </div>
+                <div className="bg-orange-50 rounded-lg p-4 border border-orange-200">
+                  <p className="text-sm font-semibold text-orange-800 mb-1">Cache TTL</p>
+                  <p className="text-2xl font-bold text-orange-900">{cacheDetails.cacheTTLMinutes} min</p>
+                </div>
+              </div>
+
+              {/* File List */}
+              {cacheDetails.files.length > 0 ? (
+                <div className="space-y-3">
+                  <h4 className="text-lg font-bold text-gray-900 mb-3">Cached Files</h4>
+                  {cacheDetails.files.map((file: any, index: number) => (
+                    <div
+                      key={index}
+                      className={`p-4 rounded-lg border ${
+                        file.isExpired
+                          ? 'bg-red-50 border-red-200'
+                          : 'bg-white border-gray-200 hover:border-gray-300'
+                      } transition-all duration-200`}
+                    >
+                      <div className="flex justify-between items-start">
+                        <div className="flex-1">
+                          <p className="font-semibold text-gray-900 mb-1">{file.fileName}</p>
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+                            <div>
+                              <span className="text-gray-600">Rows:</span>{' '}
+                              <span className="font-semibold text-gray-900">{file.rowCount.toLocaleString()}</span>
+                            </div>
+                            <div>
+                              <span className="text-gray-600">Size:</span>{' '}
+                              <span className="font-semibold text-gray-900">{file.estimatedSizeMB} MB</span>
+                            </div>
+                            <div>
+                              <span className="text-gray-600">Age:</span>{' '}
+                              <span className="font-semibold text-gray-900">
+                                {file.ageMinutes}m {file.ageSeconds}s
+                              </span>
+                            </div>
+                            <div>
+                              <span className="text-gray-600">Expires:</span>{' '}
+                              <span className={`font-semibold ${file.isExpired ? 'text-red-600' : 'text-green-600'}`}>
+                                {file.isExpired ? 'Expired' : `in ${file.expiresInMinutes}m`}
+                              </span>
+                            </div>
+                          </div>
+                          <p className="text-xs text-gray-500 mt-2">
+                            Cached at: {new Date(file.cachedAt).toLocaleString()}
+                          </p>
+                        </div>
+                        {file.isExpired && (
+                          <span className="ml-2 px-2 py-1 bg-red-100 text-red-800 text-xs font-semibold rounded">
+                            Expired
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-8">
+                  <SparklesIcon className="h-12 w-12 text-gray-400 mx-auto mb-3" />
+                  <p className="text-gray-600">No files cached yet</p>
+                  <p className="text-sm text-gray-500 mt-2">Click "Pre-cache Files" to cache files for faster searches</p>
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end mt-8 pt-6 border-t border-gray-200">
+              <button
+                onClick={() => setShowCacheDetailsModal(false)}
+                className="px-6 py-3 bg-gradient-to-r from-gray-600 to-gray-700 hover:from-gray-700 hover:to-gray-800 text-white rounded-lg transition-all duration-200 shadow-lg hover:shadow-xl"
+              >
+                Close
               </button>
             </div>
           </div>

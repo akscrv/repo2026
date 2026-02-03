@@ -26,9 +26,11 @@ const { authenticateToken } = require('./middleware/auth');
 
 const app = express();
 
-// Import User model for cleanup
+// Import models for cleanup
 const User = require('./models/User');
 const PaymentProof = require('./models/PaymentProof');
+const Notification = require('./models/Notification');
+const Inventory = require('./models/Inventory');
 const fs = require('fs').promises;
 
 // Security middleware
@@ -355,6 +357,97 @@ setInterval(async () => {
     console.error('Error cleaning up payment proof photos:', error);
   }
 }, 24 * 60 * 60 * 1000); // Run every 24 hours
+
+// Cleanup notifications older than 30 days (or 1 minute for testing)
+const cleanupOldNotifications = async () => {
+  try {
+    // Calculate date threshold (1 minute for testing, change to 30 days for production)
+    // const thresholdDate = new Date(Date.now() - 1 * 60 * 1000); // 1 minute for testing
+    const thresholdDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000); // 30 days for production
+    
+    console.log(`🔍 Checking for notifications older than: ${thresholdDate.toISOString()}`);
+    console.log(`🔍 Current time: ${new Date().toISOString()}`);
+    
+    // First, check how many notifications exist and their dates
+    const allNotifications = await Notification.find({}).select('createdAt').lean();
+    console.log(`📊 Total notifications in database: ${allNotifications.length}`);
+    
+    if (allNotifications.length > 0) {
+      const oldestNotification = allNotifications.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))[0];
+      const newestNotification = allNotifications.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
+      console.log(`📅 Oldest notification: ${oldestNotification.createdAt}`);
+      console.log(`📅 Newest notification: ${newestNotification.createdAt}`);
+    }
+    
+    // Find and delete notifications older than threshold
+    const result = await Notification.deleteMany({
+      createdAt: { $lt: thresholdDate }
+    });
+    
+    if (result.deletedCount > 0) {
+      console.log(`🗑️ Successfully deleted ${result.deletedCount} notifications older than threshold`);
+    } else {
+      console.log('✅ No old notifications to delete (all notifications are newer than threshold)');
+    }
+  } catch (error) {
+    console.error('❌ Error cleaning up old notifications:', error);
+  }
+};
+
+// Run cleanup immediately on server start (for testing)
+// Remove this after testing, or wrap it in a condition
+setTimeout(() => {
+  console.log('🚀 Running initial notification cleanup...');
+  cleanupOldNotifications();
+}, 5000); // Wait 5 seconds after server starts to ensure DB is connected
+
+// Also run cleanup periodically (every 1 minute for testing, change to 24 hours for production)
+// setInterval(cleanupOldNotifications, 1 * 60 * 1000); // Run every 1 minute for testing
+setInterval(cleanupOldNotifications, 24 * 60 * 60 * 1000); // Run every 24 hours for production
+
+// Cleanup inventories older than 30 days
+const cleanupOldInventories = async () => {
+  try {
+    // Calculate date 30 days ago
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    
+    console.log(`🔍 Checking for inventories older than: ${thirtyDaysAgo.toISOString()}`);
+    console.log(`🔍 Current time: ${new Date().toISOString()}`);
+    
+    // First, check how many inventories exist and their dates
+    const allInventories = await Inventory.find({}).select('createdAt').lean();
+    console.log(`📊 Total inventories in database: ${allInventories.length}`);
+    
+    if (allInventories.length > 0) {
+      const oldestInventory = allInventories.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))[0];
+      const newestInventory = allInventories.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
+      console.log(`📅 Oldest inventory: ${oldestInventory.createdAt}`);
+      console.log(`📅 Newest inventory: ${newestInventory.createdAt}`);
+    }
+    
+    // Find and delete inventories older than 30 days
+    const result = await Inventory.deleteMany({
+      createdAt: { $lt: thirtyDaysAgo }
+    });
+    
+    if (result.deletedCount > 0) {
+      console.log(`🗑️ Successfully deleted ${result.deletedCount} inventories older than 30 days`);
+    } else {
+      console.log('✅ No old inventories to delete (all inventories are newer than 30 days)');
+    }
+  } catch (error) {
+    console.error('❌ Error cleaning up old inventories:', error);
+  }
+};
+
+// Run inventory cleanup immediately on server start (for testing)
+setTimeout(() => {
+  console.log('🚀 Running initial inventory cleanup...');
+  cleanupOldInventories();
+}, 6000); // Wait 6 seconds after server starts to ensure DB is connected
+
+// Run inventory cleanup periodically (every 24 hours)
+setInterval(cleanupOldInventories, 24 * 60 * 60 * 1000); // Run every 24 hours
 
 // Graceful shutdown
 process.on('SIGTERM', () => {

@@ -133,11 +133,11 @@ const excelVehicleSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// HIGH-PERFORMANCE INDEXES - Only for 3 key search fields (70% faster)
+// OPTIMIZED INDEXES - Only for registration_number and chasis_number search fields
 excelVehicleSchema.index({ excel_file: 1, isActive: 1 }); // For listing vehicles by file
 excelVehicleSchema.index({ isActive: 1, excel_file: 1 }); // Reverse order for different queries
 
-// Super-fast individual field indexes for exact matches (sparse = faster)
+// Individual field indexes for search (sparse = faster, only indexes non-null values)
 excelVehicleSchema.index({ registration_number: 1, isActive: 1 }, { 
   sparse: true,
   background: true,
@@ -148,36 +148,15 @@ excelVehicleSchema.index({ chasis_number: 1, isActive: 1 }, {
   background: true,
   name: 'chasis_search_idx'
 });
-excelVehicleSchema.index({ engine_number: 1, isActive: 1 }, { 
-  sparse: true,
-  background: true,
-  name: 'engine_search_idx'
-});
 
-// Compound indexes for multi-field searches (ultra-fast)
+// Compound index for multi-field searches (registration_number + chasis_number)
 excelVehicleSchema.index({ 
   registration_number: 1, 
   chasis_number: 1, 
   isActive: 1 
 }, { sparse: true, name: 'reg_chasis_idx' });
 
-excelVehicleSchema.index({ 
-  registration_number: 1, 
-  engine_number: 1, 
-  isActive: 1 
-}, { sparse: true, name: 'reg_engine_idx' });
-
 // Recent uploads index
 excelVehicleSchema.index({ createdAt: -1, excel_file: 1, isActive: 1 });
-
-// Optimized index for alphabetical sorting by registration number
-excelVehicleSchema.index({ 
-  registration_number: 1, 
-  isActive: 1 
-}, { 
-  sparse: true, 
-  background: true, 
-  name: 'reg_alphabetical_sort_idx' 
-});
 
 module.exports = mongoose.model('ExcelVehicle', excelVehicleSchema); 

@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../hooks/useAuth';
 import SessionStatus from './SessionStatus';
 import ProfileImage from './ProfileImage';
+import { notificationsAPI } from '../services/api';
 import {
   HomeIcon,
   UsersIcon,
@@ -89,6 +91,15 @@ const getNavigation = (userRole?: string) => {
     });
   }
 
+  // Add Notifications for auditors (see same notifications as their admin)
+  if (userRole === 'auditor') {
+    baseNavigation.push({ 
+      name: 'Notifications', 
+      href: '/notifications', 
+      icon: BellIcon
+    });
+  }
+
   // Add Back Office Numbers only for Admin role
   if (userRole === 'admin') {
     baseNavigation.push({ 
@@ -108,11 +119,11 @@ const getNavigation = (userRole?: string) => {
   }
 
   if (userRole === 'auditor') {
-    // baseNavigation.push({ 
-    //   name: 'Money Management', 
-    //   href: '/money', 
-    //   icon: CurrencyDollarIcon
-    // });
+    baseNavigation.push({ 
+      name: 'Money Management', 
+      href: '/money', 
+      icon: CurrencyDollarIcon
+    });
     baseNavigation.push({ 
       name: 'Field Agents', 
       href: '/users', 
@@ -329,6 +340,19 @@ export default function Layout({ children }: LayoutProps) {
   // Check if current page is a payment page
   const isPaymentPage = paymentNavigation.some(item => item.href === location.pathname);
 
+  // Check if user has access to notifications
+  const hasNotificationAccess = user && ['admin', 'superAdmin', 'superSuperAdmin', 'auditor'].includes(user.role);
+
+  // Fetch notification stats for unread count
+  const { data: notificationStats } = useQuery({
+    queryKey: ['notification-stats'],
+    queryFn: () => notificationsAPI.getStats(),
+    enabled: !!hasNotificationAccess,
+    refetchInterval: 30000, // Refetch every 30 seconds
+  });
+
+  const unreadCount = notificationStats?.data?.data?.unread || 0;
+
   const handleLogout = async () => {
     await logout();
     navigate('/');
@@ -353,7 +377,7 @@ export default function Layout({ children }: LayoutProps) {
             className="fixed inset-0 bg-black/50 backdrop-blur-sm" 
             onClick={() => setSidebarOpen(false)} 
           />
-          <div className="fixed inset-y-0 left-0 w-80 bg-white shadow-2xl flex flex-col">
+          <div className="fixed inset-y-0 left-0 w-80 bg-white shadow-2xl flex flex-col h-screen">
             {/* Mobile sidebar header */}
                          <div className="flex h-16 items-center justify-between px-6 border-b border-gray-200 flex-shrink-0">
               <div className="flex items-center">
@@ -371,7 +395,7 @@ export default function Layout({ children }: LayoutProps) {
             </div>
 
             {/* Mobile navigation - scrollable */}
-            <div className="flex-1 overflow-y-auto sidebar-scroll">
+            <div className="flex-1 overflow-y-auto overflow-x-hidden sidebar-scroll min-h-0">
                              <nav className="px-3 py-3 space-y-2">
                 {/* Main Navigation */}
                 <div className="space-y-2">
@@ -480,8 +504,8 @@ export default function Layout({ children }: LayoutProps) {
 
       {/* Desktop sidebar */}
       {desktopSidebarOpen && (
-        <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-80 lg:flex-col">
-                   <div className="flex flex-col flex-grow bg-white border-r-2 border-gray-300 shadow-sm">
+        <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-80 lg:flex-col lg:h-screen">
+                   <div className="flex flex-col h-full bg-white border-r-2 border-gray-300 shadow-sm">
                     {/* Desktop sidebar header */}
                         <div className="flex h-16 items-center px-6 border-b-2 border-gray-300 flex-shrink-0">
             <div className="flex items-center">
@@ -493,7 +517,7 @@ export default function Layout({ children }: LayoutProps) {
           </div>
 
           {/* Desktop navigation - scrollable */}
-          <div className="flex-1 overflow-y-auto sidebar-scroll">
+          <div className="flex-1 overflow-y-auto overflow-x-hidden sidebar-scroll min-h-0">
                          <nav className="px-3 py-3 space-y-3">
               {/* Main Navigation */}
                              <div className="space-y-1">
@@ -632,6 +656,22 @@ export default function Layout({ children }: LayoutProps) {
             <div className="flex items-center space-x-4">
               {/* Session Status */}
               <SessionStatus className="hidden md:flex" />
+              
+              {/* Notification Icon with Badge */}
+              {hasNotificationAccess && (
+                <Link
+                  to="/notifications"
+                  className="relative p-2 text-gray-600 hover:text-gray-900 transition-colors rounded-lg hover:bg-gray-100"
+                  title={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ''}`}
+                >
+                  <BellIcon className="h-6 w-6" />
+                  {unreadCount > 0 && (
+                    <span className="absolute top-0 right-0 flex min-w-[20px] h-5 items-center justify-center rounded-full bg-red-500 text-xs font-bold text-white px-1 transform translate-x-1/2 -translate-y-1/2 shadow-lg border-2 border-white">
+                      {unreadCount > 99 ? '99+' : unreadCount}
+                    </span>
+                  )}
+                </Link>
+              )}
               
               {/* Weather widget */}
               <div className="hidden md:flex items-center space-x-2 bg-gray-100 rounded-lg px-3 py-2">

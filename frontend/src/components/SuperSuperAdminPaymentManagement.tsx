@@ -9,7 +9,8 @@ import {
   DocumentTextIcon,
   CheckCircleIcon,
   XCircleIcon,
-  ClockIcon
+  ClockIcon,
+  ExclamationTriangleIcon
 } from '@heroicons/react/24/outline';
 import api from '../services/api';
 import { getImageUrl } from '../utils/config';
@@ -138,6 +139,12 @@ const SuperSuperAdminPaymentManagement: React.FC = () => {
     e.preventDefault();
     if (!selectedMonth) {
       toast.error('Please select a month');
+      return;
+    }
+    if (!ratesData?.data) {
+      toast.error('Please set payment rates first before generating payments');
+      setShowGenerateModal(false);
+      setShowRateModal(true);
       return;
     }
     generatePaymentsMutation.mutate({ month: selectedMonth });
@@ -333,15 +340,24 @@ const SuperSuperAdminPaymentManagement: React.FC = () => {
                       {payment.paymentPeriod}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex items-center">
-                        <UserGroupIcon className="w-4 h-4 text-gray-400 mr-1" />
-                        <span className="text-sm text-gray-900">
-                          {payment.userCount}
-                          {payment.deletedUserCount && payment.deletedUserCount > 0 && (
-                            <span className="text-red-500"> ({payment.deletedUserCount} deleted)</span>
-                          )}
-                        </span>
-                      </div>
+                    <div className="flex items-center gap-2">
+  <UserGroupIcon className="w-4 h-4 text-gray-400" />
+
+  {/* Total Users */}
+  <span className="text-sm text-gray-900 font-medium">
+    {payment.userCount}
+  </span>
+
+  {/* Deleted Users – always visible */}
+  <span
+    className={`text-sm ${
+      payment.deletedUserCount > 0 ? 'text-red-500' : 'text-gray-400'
+    }`}
+  >
+    ({payment.deletedUserCount ?? 0} deleted)
+  </span>
+</div>
+
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm text-gray-900">₹{payment.totalAmount}</div>
@@ -447,40 +463,111 @@ const SuperSuperAdminPaymentManagement: React.FC = () => {
       {/* Generate Payments Modal */}
       {showGenerateModal && (
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+          <div className="relative top-20 mx-auto p-6 border w-full max-w-2xl shadow-xl rounded-lg bg-white">
             <div className="mt-3">
-              <h3 className="text-lg font-medium text-gray-900 mb-4">Generate Payments</h3>
-              <form onSubmit={handleGeneratePayments} className="space-y-4">
+              <h3 className="text-2xl font-bold text-gray-900 mb-6">Generate Payments</h3>
+              <form onSubmit={handleGeneratePayments} className="space-y-6">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Month</label>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">Select Month</label>
                   <input
                     type="month"
                     value={selectedMonth}
                     onChange={(e) => setSelectedMonth(e.target.value)}
-                    className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                    className="mt-1 block w-full border-2 border-gray-300 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-lg"
                     required
                   />
                 </div>
-                <div className="text-sm text-gray-600">
-                  <p>This will generate payments for all Super Admins for the selected month.</p>
-                  <p className="mt-1">Payments will be calculated based on:</p>
-                  <ul className="mt-1 list-disc list-inside">
+
+                {/* Current Rates Display */}
+                {!ratesData?.data ? (
+                  <div className="bg-red-50 border-2 border-red-300 rounded-lg p-5">
+                    <div className="flex items-start">
+                      <ExclamationTriangleIcon className="h-6 w-6 text-red-500 mr-3 flex-shrink-0 mt-0.5" />
+                      <div className="flex-1">
+                        <h4 className="text-lg font-semibold text-red-800 mb-2">
+                          ⚠️ Payment Rates Not Set
+                        </h4>
+                        <p className="text-sm text-red-700 mb-4">
+                          You must set payment rates before generating payments. Payments cannot be generated without rates.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowGenerateModal(false);
+                            setShowRateModal(true);
+                          }}
+                          className="px-4 py-2 text-sm font-semibold text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors shadow-md"
+                        >
+                          Set Payment Rates Now
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bg-gradient-to-br from-green-50 to-emerald-50 border-2 border-green-300 rounded-lg p-5">
+                    <div className="flex items-center justify-between mb-4">
+                      <h4 className="text-lg font-semibold text-green-900 flex items-center">
+                        <CurrencyDollarIcon className="h-5 w-5 mr-2" />
+                        Current Payment Rates
+                      </h4>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowGenerateModal(false);
+                          setShowRateModal(true);
+                        }}
+                        className="px-3 py-1.5 text-xs font-semibold text-green-700 bg-white border-2 border-green-300 rounded-lg hover:bg-green-50 transition-colors"
+                      >
+                        Change Rates
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="bg-white p-4 rounded-lg border-2 border-blue-200 shadow-sm">
+                        <div className="flex items-center mb-2">
+                          <UserGroupIcon className="w-5 h-5 text-blue-600 mr-2" />
+                          <span className="text-sm font-semibold text-blue-900">Per User Rate</span>
+                        </div>
+                        <p className="text-2xl font-bold text-blue-600">₹{ratesData.data.perUserRate}</p>
+                        <p className="text-xs text-gray-500 mt-1">per user / month</p>
+                      </div>
+                      <div className="bg-white p-4 rounded-lg border-2 border-green-200 shadow-sm">
+                        <div className="flex items-center mb-2">
+                          <CurrencyDollarIcon className="w-5 h-5 text-green-600 mr-2" />
+                          <span className="text-sm font-semibold text-green-900">Service Rate</span>
+                        </div>
+                        <p className="text-2xl font-bold text-green-600">₹{ratesData.data.serviceRate}</p>
+                        <p className="text-xs text-gray-500 mt-1">per super admin / month</p>
+                      </div>
+                    </div>
+                    {ratesData.data.notes && (
+                      <div className="mt-4 p-3 bg-white rounded-lg border border-gray-200">
+                        <p className="text-xs font-semibold text-gray-600 mb-1">Notes:</p>
+                        <p className="text-sm text-gray-700">{ratesData.data.notes}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <p className="text-sm font-semibold text-blue-900 mb-2">Payment Calculation Details:</p>
+                  <ul className="text-sm text-blue-800 space-y-1 list-disc list-inside">
                     <li>Total active users + deleted users in that month</li>
                     <li>Service charges (prorated if Super Admin was created mid-month)</li>
                   </ul>
                 </div>
-                <div className="flex justify-end space-x-3">
+
+                <div className="flex justify-end space-x-3 pt-4 border-t border-gray-200">
                   <button
                     type="button"
                     onClick={() => setShowGenerateModal(false)}
-                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 border border-gray-300 rounded-md hover:bg-gray-200"
+                    className="px-6 py-2.5 text-sm font-semibold text-gray-700 bg-gray-100 border-2 border-gray-300 rounded-lg hover:bg-gray-200 transition-colors"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
-                    disabled={generatePaymentsMutation.isPending}
-                    className="px-4 py-2 text-sm font-medium text-white bg-green-600 border border-transparent rounded-md hover:bg-green-700 disabled:opacity-50"
+                    disabled={generatePaymentsMutation.isPending || !ratesData?.data}
+                    className="px-6 py-2.5 text-sm font-semibold text-white bg-gradient-to-r from-green-600 to-emerald-600 border border-transparent rounded-lg hover:from-green-700 hover:to-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-md"
                   >
                     {generatePaymentsMutation.isPending ? 'Generating...' : 'Generate Payments'}
                   </button>

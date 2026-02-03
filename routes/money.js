@@ -7,7 +7,7 @@ const XLSX = require('xlsx');
 const { body, validationResult } = require('express-validator');
 const MoneyRecord = require('../models/MoneyRecord');
 const MoneyExcelFile = require('../models/MoneyExcelFile');
-const ExcelVehicle = require('../models/ExcelVehicle');
+// ✅ PRODUCTION: ExcelVehicle removed - vehicle lookup uses VehicleLookup + GCS via /excel/vehicles/by-reg endpoint
 const { authenticateToken, authorizeRole } = require('../middleware/auth');
 
 // Configure multer for Excel file uploads

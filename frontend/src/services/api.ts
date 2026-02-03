@@ -45,10 +45,17 @@ api.interceptors.request.use(
   }
 )
 
-// Response interceptor to handle auth errors
+// Response interceptor to handle auth errors and storage quota errors
 api.interceptors.response.use(
   (response) => response,
   (error) => {
+    // Handle storage quota exceeded (507)
+    if (error.response?.status === 507) {
+      const errorMessage = error.response?.data?.message || 'Storage quota exceeded'
+      // This will be handled by individual components, but we can add a global handler here if needed
+      console.error('Storage quota exceeded:', errorMessage)
+    }
+    
     if (error.response?.status === 401) {
       const errorMessage = error.response?.data?.message
       
@@ -113,6 +120,9 @@ export const usersAPI = {
   delete: (id: string) => api.delete(`/users/${id}`),
   updatePassword: (id: string, data: { newPassword: string }) => api.put(`/users/${id}/password`, data),
   updateStatus: (id: string, data: { isActive: boolean }) => api.put(`/users/${id}/status`, data),
+  updateSharingPermission: (id: string, data: { canShareFiles: boolean; allowedSharingAdmins?: string[] }) => api.put(`/users/${id}/sharing-permission`, data),
+  requestSharingPermission: () => api.post('/users/request-sharing-permission'),
+  getSharingPermissionRequests: () => api.get('/users/sharing-permission-requests'),
   getFieldAgents: () => api.get('/users/field-agents/list'),
   getAdmins: () => api.get('/users/admins/list'),
   getByAdmin: (adminId: string) => api.get(`/users/by-admin/${adminId}`),
@@ -133,8 +143,12 @@ export const excelAPI = {
   deleteFile: (id: string) => api.delete(`/excel/files/${id}`),
   reassignFile: (id: string, data: { assignedTo: string }) => api.put(`/excel/files/${id}/reassign`, data),
   updateAssignments: (id: string, data: { assignedAdmins: string[] }) => api.put(`/excel/files/${id}/update-assignments`, data),
+  updateSharedAdmins: (id: string, data: { sharedAdmins: string[] }) => api.put(`/excel/files/${id}/update-shared-admins`, data),
   downloadTemplate: () => api.get('/excel/template', { responseType: 'blob' }),
   searchVehicles: (params?: any) => api.get('/excel/vehicles', { params }),
+  getVehicleDetails: (id: string) => api.get(`/excel/vehicles/${id}/details`),
+  preCacheFiles: () => api.post('/excel/pre-cache-files'),
+  getCacheDetails: () => api.get('/excel/cache-details'),
 }
 
 // OTP API
@@ -148,7 +162,7 @@ export const otpAPI = {
 
 // Notifications API
 export const notificationsAPI = {
-  logAction: (data: { vehicleNumber: string; action: 'viewed' | 'verified'; vehicleId?: string }) => 
+  logAction: (data: { vehicleNumber: string; action: 'viewed' | 'verified' | 'searched'; vehicleId?: string; excelFileId?: string }) => 
     api.post('/notifications/log-action', data),
   getAll: (params?: any) => api.get('/notifications', { params }),
   markAsRead: (id: string) => api.put(`/notifications/${id}/read`),

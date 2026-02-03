@@ -159,20 +159,32 @@ router.get('/versions',
 // @access  Public
 router.get('/public/versions', async (req, res) => {
   try {
+    console.log('📱 Public app versions request received');
+    
     const appVersions = await AppVersion.find({ isActive: true })
       .populate('uploadedBy', 'name')
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean(); // Use lean() for better performance
 
+    console.log(`📱 Found ${appVersions.length} active app version(s)`);
+    
+    // Log version details for debugging
+    appVersions.forEach((version, index) => {
+      console.log(`  ${index + 1}. ${version.appType} - v${version.version} (Code: ${version.versionCode})`);
+    });
+
+    // Ensure data is always an array (not null)
     res.json({
       success: true,
-      data: appVersions
+      data: appVersions || []
     });
 
   } catch (error) {
-    console.error('Error fetching public app versions:', error);
+    console.error('❌ Error fetching public app versions:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error while fetching app versions'
+      message: 'Server error while fetching app versions',
+      data: [] // Return empty array on error
     });
   }
 });
@@ -182,32 +194,56 @@ router.get('/public/versions', async (req, res) => {
 // @access  Public
 router.get('/download/:id', async (req, res) => {
   try {
+    console.log(`📥 App download request for ID: ${req.params.id}`);
+    
     const appVersion = await AppVersion.findById(req.params.id);
     
     if (!appVersion) {
+      console.log(`❌ App version not found: ${req.params.id}`);
       return res.status(404).json({
         success: false,
         message: 'App version not found'
       });
     }
 
+    console.log(`📥 Downloading: ${appVersion.fileName} (${appVersion.appType} v${appVersion.version})`);
+
     // Increment download count
     appVersion.downloadCount += 1;
     await appVersion.save();
+    console.log(`📊 Download count updated: ${appVersion.downloadCount}`);
 
     const filePath = path.join(__dirname, '..', appVersion.filePath);
     
     if (!fs.existsSync(filePath)) {
+      console.error(`❌ APK file not found at: ${filePath}`);
       return res.status(404).json({
         success: false,
-        message: 'App file not found'
+        message: 'App file not found on server'
       });
     }
 
-    res.download(filePath, appVersion.fileName);
+    // Set appropriate headers for APK download
+    res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+    res.setHeader('Content-Disposition', `attachment; filename="${appVersion.fileName}"`);
+    
+    console.log(`✅ Sending APK file: ${appVersion.fileName}`);
+    res.download(filePath, appVersion.fileName, (err) => {
+      if (err) {
+        console.error('❌ Error sending file:', err);
+        if (!res.headersSent) {
+          res.status(500).json({
+            success: false,
+            message: 'Error downloading file'
+          });
+        }
+      } else {
+        console.log(`✅ APK file sent successfully: ${appVersion.fileName}`);
+      }
+    });
 
   } catch (error) {
-    console.error('Error downloading app:', error);
+    console.error('❌ Error downloading app:', error);
     res.status(500).json({
       success: false,
       message: 'Server error while downloading app'

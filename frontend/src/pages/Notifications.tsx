@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { notificationsAPI } from '../services/api'
 import { useAuth } from '../hooks/useAuth'
@@ -26,6 +26,13 @@ interface Notification {
   isRead: boolean
   isOnline: boolean
   ipAddress: string
+  fileName?: string | null
+  maskedFileName?: string | null // Masked file name (for non-primary admins)
+  excelFileId?: string
+  primaryAdminId?: string
+  primaryAdminName?: string | null // Primary admin name (shown when maskedFileName is used)
+  fileUploaderRole?: string
+  adminName?: string // Admin name (for field agent/auditor actions)
 }
 
 export default function Notifications() {
@@ -37,6 +44,8 @@ export default function Notifications() {
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [hasAutoMarkedAsRead, setHasAutoMarkedAsRead] = useState(false)
+  const [isAutoMarking, setIsAutoMarking] = useState(false)
 
   // Debounce search to prevent excessive API calls
   useEffect(() => {
@@ -61,7 +70,7 @@ export default function Notifications() {
       console.log('🔍 Frontend search params:', params);
       return notificationsAPI.getAll(params);
     },
-    enabled: !!currentUser && ['admin', 'superAdmin', 'superSuperAdmin'].includes(currentUser.role),
+    enabled: !!currentUser && ['admin', 'superAdmin', 'superSuperAdmin', 'auditor'].includes(currentUser.role),
     refetchInterval: 30000, // Refetch every 30 seconds for real-time updates
   })
 
@@ -69,7 +78,7 @@ export default function Notifications() {
   const { data: statsData } = useQuery({
     queryKey: ['notification-stats'],
     queryFn: () => notificationsAPI.getStats(),
-    enabled: !!currentUser && ['admin', 'superAdmin', 'superSuperAdmin'].includes(currentUser.role),
+    enabled: !!currentUser && ['admin', 'superAdmin', 'superSuperAdmin', 'auditor'].includes(currentUser.role),
     refetchInterval: 30000,
   })
 
@@ -86,15 +95,35 @@ export default function Notifications() {
   const markAllAsReadMutation = useMutation({
     mutationFn: () => notificationsAPI.markAllAsRead(),
     onSuccess: (data) => {
-      toast.success(data.data.message)
+      // Only show toast if manually triggered (button click), not auto-mark
+      if (!isAutoMarking) {
+        toast.success(data.data.message)
+      }
+      setIsAutoMarking(false)
       queryClient.invalidateQueries({ queryKey: ['notifications'] })
       queryClient.invalidateQueries({ queryKey: ['notification-stats'] })
+    },
+    onError: (error: any) => {
+      // Reset flags on error so it can retry
+      setHasAutoMarkedAsRead(false)
+      setIsAutoMarking(false)
+      toast.error(error.response?.data?.message || 'Failed to mark notifications as read')
     }
   })
 
   const notifications = notificationsData?.data?.data || []
   const pagination = notificationsData?.data?.pagination
   const stats = statsData?.data?.data || { total: 0, unread: 0, viewed: 0, verified: 0 }
+  
+  // Auto-mark all notifications as read when page opens (only once)
+  useEffect(() => {
+    // Only mark as read once when component mounts and stats are loaded
+    if (!hasAutoMarkedAsRead && statsData?.data?.data && statsData.data.data.unread > 0) {
+      setHasAutoMarkedAsRead(true)
+      setIsAutoMarking(true)
+      markAllAsReadMutation.mutate()
+    }
+  }, [statsData, hasAutoMarkedAsRead, markAllAsReadMutation])
   
   // Debug: Log notifications when they change
   useEffect(() => {
@@ -104,7 +133,7 @@ export default function Notifications() {
       filter,
       page 
     });
-  }, [notifications, debouncedSearch, filter, page]);
+  }, [notifications, debouncedSearch, filter, page])
 
   const handleMarkAsRead = (notifId: string) => {
     markAsReadMutation.mutate(notifId)
@@ -156,7 +185,7 @@ export default function Notifications() {
     return action === 'verified' ? 'text-green-600' : 'text-blue-600'
   }
 
-  if (!currentUser || !['admin', 'superAdmin', 'superSuperAdmin'].includes(currentUser.role)) {
+  if (!currentUser || !['admin', 'superAdmin', 'superSuperAdmin', 'auditor'].includes(currentUser.role)) {
     return (
       <div className="card">
         <div className="card-body text-center py-12">
@@ -351,9 +380,41 @@ export default function Notifications() {
                         
                         <div className="flex-1">
                           <div className="mb-1">
-                            <span className="font-semibold text-navy">{notification.userName}</span>
-                            <span className="text-gray-500"> {notification.action} details of vehicle no. </span>
+                            {/* Show admin name for field agent and auditor actions */}
+                            {(notification.userRole === 'fieldAgent' || notification.userRole === 'auditor') && notification.adminName ? (
+                              <>
+                                <span className="font-semibold text-navy">{notification.userName}</span>
+                                <span className="text-gray-500"> from Admin </span>
+                                <span className="font-semibold text-blue-600">{notification.adminName}</span>
+                                <span className="text-gray-500"> {notification.action} </span>
+                              </>
+                            ) : (
+                              <>
+                                <span className="font-semibold text-navy">{notification.userName}</span>
+                                <span className="text-gray-500"> {notification.action} </span>
+                              </>
+                            )}
+                            {(notification.fileName || notification.maskedFileName) && (
+                              <>
+                                <span className="text-gray-500"> vehicle from file </span>
+                                <span className="font-semibold text-purple-600">
+                                  {notification.fileName || notification.maskedFileName}
+                                </span>
+                                {notification.maskedFileName && notification.primaryAdminName && (
+                                  <>
+                                    <span className="text-gray-500"> (Primary Admin: </span>
+                                    <span className="font-semibold text-blue-600">{notification.primaryAdminName}</span>
+                                    <span className="text-gray-500">)</span>
+                                  </>
+                                )}
+                                <span className="text-gray-500"> (vehicle no. </span>
+                              </>
+                            )}
+                            {!notification.fileName && !notification.maskedFileName && (
+                              <span className="text-gray-500"> details of vehicle no. </span>
+                            )}
                             <span className="font-mono font-semibold text-orange">{notification.vehicleNumber}</span>
+                            {(notification.fileName || notification.maskedFileName) && <span className="text-gray-500">)</span>}
                           </div>
                           
                           <div className="flex items-center space-x-4 text-sm text-gray-600">

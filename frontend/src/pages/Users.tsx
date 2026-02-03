@@ -15,10 +15,278 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   UsersIcon,
-  EyeIcon
+  EyeIcon,
+  ShareIcon,
+  CheckCircleIcon,
+  XCircleIcon,
+  BellIcon,
+  PencilIcon
 } from '@heroicons/react/24/outline'
 import { useAuth } from '../hooks/useAuth'
 import { useNavigate } from 'react-router-dom'
+
+// Pending Permission Requests Component
+interface PendingPermissionRequestsProps {
+  onApprove: (adminId: string) => void
+  sharingPermissionMutation: any
+}
+
+const PendingPermissionRequests: React.FC<PendingPermissionRequestsProps> = ({ sharingPermissionMutation }) => {
+  const { user: currentUser } = useAuth()
+  const queryClient = useQueryClient()
+  
+  const { data: requestsData, isLoading } = useQuery({
+    queryKey: ['sharing-permission-requests'],
+    queryFn: () => usersAPI.getSharingPermissionRequests(),
+    enabled: (currentUser?.role === 'superAdmin' || currentUser?.role === 'superSuperAdmin'),
+    refetchInterval: 30000, // Refetch every 30 seconds
+  })
+
+  const requests = requestsData?.data?.data || []
+  const pendingRequests = requests.filter((r: any) => r.isPending)
+
+  const handleApprove = (adminId: string, adminName: string) => {
+    if (window.confirm(`Are you sure you want to approve file sharing permission for ${adminName}?`)) {
+      sharingPermissionMutation.mutate({ 
+        userId: adminId, 
+        canShareFiles: true 
+      }, {
+        onSuccess: () => {
+          queryClient.invalidateQueries({ queryKey: ['sharing-permission-requests'] })
+          queryClient.invalidateQueries({ queryKey: ['users'] })
+        }
+      })
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="bg-white rounded-lg shadow p-4">
+        <div className="animate-pulse">
+          <div className="h-4 bg-gray-200 rounded w-1/4 mb-4"></div>
+          <div className="h-20 bg-gray-100 rounded"></div>
+        </div>
+      </div>
+    )
+  }
+
+  if (pendingRequests.length === 0) {
+    return null
+  }
+
+  return (
+    <div className="bg-white rounded-lg shadow border-l-4 border-yellow-500">
+      <div className="p-4 border-b-2 border-gray-400">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center">
+            <BellIcon className="h-5 w-5 mr-2 text-yellow-600" />
+            <h3 className="text-lg font-medium text-gray-900">Pending Permission Requests</h3>
+            <span className="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+              {pendingRequests.length} {pendingRequests.length === 1 ? 'Request' : 'Requests'}
+            </span>
+          </div>
+        </div>
+        <p className="text-sm text-gray-600 mt-1">
+          Admins have requested permission to share files with other admins. Review and approve or manage from the list below.
+        </p>
+      </div>
+      <div className="p-4">
+        <div className="space-y-3">
+          {pendingRequests.map((request: any) => (
+            <div key={request._id} className="flex items-center justify-between p-4 bg-yellow-50 rounded-lg border border-yellow-200">
+              <div className="flex items-center">
+                <div className="flex-shrink-0 h-10 w-10 rounded-full bg-yellow-100 flex items-center justify-center">
+                  <UserIcon className="h-5 w-5 text-yellow-600" />
+                </div>
+                <div className="ml-4">
+                  <div className="text-sm font-medium text-gray-900">{request.admin.name}</div>
+                  <div className="text-xs text-gray-500">{request.admin.email}</div>
+                  <div className="text-xs text-gray-400 mt-1">
+                    Requested {new Date(request.requestedAt).toLocaleString()}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => handleApprove(request.admin._id, request.admin.name)}
+                  disabled={sharingPermissionMutation.isPending}
+                  className="inline-flex items-center px-4 py-2 rounded-md text-sm font-medium bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <CheckCircleIcon className="h-4 w-4 mr-1" />
+                  Approve
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Admins With Permission Requests Component (shows only those who requested)
+interface AdminsWithPermissionRequestsProps {
+  sharingPermissionMutation: any
+  handleSharingPermissionToggle: (user: User) => void
+  handleOpenAllowedAdminsModal: (admin: User) => void
+}
+
+const AdminsWithPermissionRequests: React.FC<AdminsWithPermissionRequestsProps> = ({ 
+  sharingPermissionMutation, 
+  handleSharingPermissionToggle,
+  handleOpenAllowedAdminsModal
+}) => {
+  const { user: currentUser } = useAuth()
+  const queryClient = useQueryClient()
+  
+  const { data: requestsData, isLoading } = useQuery({
+    queryKey: ['sharing-permission-requests'],
+    queryFn: () => usersAPI.getSharingPermissionRequests(),
+    enabled: (currentUser?.role === 'superAdmin' || currentUser?.role === 'superSuperAdmin'),
+    refetchInterval: 30000, // Refetch every 30 seconds
+  })
+
+  const requests = requestsData?.data?.data || []
+
+  if (isLoading) {
+    return (
+      <div className="bg-white rounded-lg shadow p-4">
+        <div className="animate-pulse">
+          <div className="h-4 bg-gray-200 rounded w-1/4 mb-4"></div>
+          <div className="h-20 bg-gray-100 rounded"></div>
+        </div>
+      </div>
+    )
+  }
+
+  if (requests.length === 0) {
+    return (
+      <div className="bg-white rounded-lg shadow">
+        <div className="p-4 border-b-2 border-gray-400">
+          <div className="flex items-center">
+            <ShareIcon className="h-5 w-5 mr-2 text-blue-600" />
+            <h3 className="text-lg font-medium text-gray-900">File Sharing Permissions</h3>
+          </div>
+          <p className="text-sm text-gray-600 mt-1">
+            Only admins who have requested permission will appear here.
+          </p>
+        </div>
+        <div className="p-4">
+          <p className="text-gray-500 text-center py-8">
+            No admins have requested file sharing permission yet.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="bg-white rounded-lg shadow">
+      <div className="p-4 border-b-2 border-gray-400">
+        <div className="flex items-center">
+          <ShareIcon className="h-5 w-5 mr-2 text-blue-600" />
+          <h3 className="text-lg font-medium text-gray-900">File Sharing Permissions</h3>
+        </div>
+        <p className="text-sm text-gray-600 mt-1">
+          Manage permissions for admins who have requested file sharing. Click the checkmark/X icon to approve/revoke their permission.
+        </p>
+      </div>
+      <div className="p-4">
+        <div className="space-y-2">
+          {requests.map((request: any) => {
+            const admin = request.admin
+            return (
+              <div key={admin._id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                <div className="flex items-center">
+                  <UserIcon className="h-5 w-5 text-blue-600 mr-3" />
+                  <div>
+                    <div className="text-sm font-medium text-gray-900">{admin.name}</div>
+                    <div className="text-xs text-gray-500">{admin.email}</div>
+                    {admin.sharingPermissionApprovedBy && (
+                      <div className="text-xs text-gray-400 mt-1">
+                        Approved by {admin.sharingPermissionApprovedBy.name}
+                        {admin.sharingPermissionApprovedAt && 
+                          ` on ${new Date(admin.sharingPermissionApprovedAt).toLocaleDateString()}`
+                        }
+                      </div>
+                    )}
+                    {!admin.canShareFiles && (
+                      <div className="text-xs text-gray-400 mt-1">
+                        Requested {new Date(request.requestedAt).toLocaleString()}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center space-x-3">
+                  <span className={`inline-flex items-center px-2 py-1 text-xs font-semibold rounded-full ${
+                    admin.canShareFiles 
+                      ? 'bg-green-100 text-green-800' 
+                      : 'bg-yellow-100 text-yellow-800'
+                  }`}>
+                    {admin.canShareFiles ? (
+                      <>
+                        <CheckCircleIcon className="h-3 w-3 mr-1" />
+                        Approved
+                      </>
+                    ) : (
+                      <>
+                        <XCircleIcon className="h-3 w-3 mr-1" />
+                        Pending
+                      </>
+                    )}
+                  </span>
+                  {admin.canShareFiles && (
+                    <button
+                      onClick={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        console.log('Edit button clicked for admin:', admin)
+                        handleOpenAllowedAdminsModal({
+                          _id: admin._id,
+                          name: admin.name,
+                          email: admin.email,
+                          role: 'admin',
+                          canShareFiles: admin.canShareFiles,
+                          allowedSharingAdmins: admin.allowedSharingAdmins || []
+                        } as User)
+                      }}
+                      className="p-2 rounded text-blue-600 hover:bg-blue-50"
+                      title="Select which admins this admin can share with"
+                    >
+                      <PencilIcon className="h-5 w-5" />
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleSharingPermissionToggle({
+                      _id: admin._id,
+                      name: admin.name,
+                      email: admin.email,
+                      role: 'admin',
+                      canShareFiles: admin.canShareFiles
+                    } as User)}
+                    disabled={sharingPermissionMutation.isPending}
+                    className={`p-2 rounded ${
+                      admin.canShareFiles 
+                        ? 'text-red-600 hover:bg-red-50' 
+                        : 'text-green-600 hover:bg-green-50'
+                    } disabled:opacity-50`}
+                    title={admin.canShareFiles ? 'Revoke permission' : 'Approve permission'}
+                  >
+                    {admin.canShareFiles ? (
+                      <XCircleIcon className="h-5 w-5" />
+                    ) : (
+                      <CheckCircleIcon className="h-5 w-5" />
+                    )}
+                  </button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+}
 
 interface User {
   _id: string
@@ -39,6 +307,18 @@ interface User {
     email: string
   }
   createdAt: string
+  canShareFiles?: boolean
+  sharingPermissionApprovedBy?: {
+    _id: string
+    name: string
+    email: string
+  }
+  sharingPermissionApprovedAt?: string
+  allowedSharingAdmins?: Array<{
+    _id: string
+    name: string
+    email: string
+  }>
 }
 
 interface CreateUserForm {
@@ -57,7 +337,7 @@ interface CreateUserForm {
 
 
 export default function Users() {
-  const { user: currentUser, logout } = useAuth()
+  const { user: currentUser, logout, refreshUser } = useAuth()
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   
@@ -90,6 +370,11 @@ export default function Users() {
   const [showViewModal, setShowViewModal] = useState(false)
   const [selectedUser, setSelectedUser] = useState<User | null>(null)
   const [expandedAdmins, setExpandedAdmins] = useState<Set<string>>(new Set())
+  
+  // State for allowed sharing admins modal
+  const [showAllowedAdminsModal, setShowAllowedAdminsModal] = useState(false)
+  const [selectedAdminForSharing, setSelectedAdminForSharing] = useState<User | null>(null)
+  const [selectedAllowedAdmins, setSelectedAllowedAdmins] = useState<string[]>([])
   const [createForm, setCreateForm] = useState<CreateUserForm>({
     name: '',
     email: '',
@@ -115,7 +400,7 @@ export default function Users() {
   const { data: adminsData, isLoading: isLoadingAdmins } = useQuery({
     queryKey: ['admins'],
     queryFn: () => usersAPI.getAll({ role: 'admin', status: 'active' }),
-    enabled: (currentUser?.role === 'superAdmin' || currentUser?.role === 'superSuperAdmin') && showCreateModal,
+    enabled: (currentUser?.role === 'superAdmin' || currentUser?.role === 'superSuperAdmin'),
   })
 
   // Mutations
@@ -171,6 +456,158 @@ export default function Users() {
       toast.error(error.response?.data?.message || 'Failed to update user status')
     }
   })
+
+  const sharingPermissionMutation = useMutation({
+    mutationFn: ({ userId, canShareFiles, allowedSharingAdmins }: { userId: string; canShareFiles: boolean; allowedSharingAdmins?: string[] }) => 
+      usersAPI.updateSharingPermission(userId, { canShareFiles, allowedSharingAdmins }),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['users'] })
+      queryClient.invalidateQueries({ queryKey: ['sharing-permission-requests'] })
+      queryClient.invalidateQueries({ queryKey: ['admins'] })
+      toast.success(data.data.message)
+    },
+    onError: (error: any) => {
+      toast.error(error.response?.data?.message || 'Failed to update sharing permission')
+    }
+  })
+
+  const requestPermissionMutation = useMutation({
+    mutationFn: () => usersAPI.requestSharingPermission(),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['users'] })
+      toast.success(data.data.message)
+    },
+    onError: (error: any) => {
+      toast.error(error.response?.data?.message || 'Failed to send permission request')
+    }
+  })
+
+  const handleRequestPermission = () => {
+    if (window.confirm('Are you sure you want to request file sharing permission? Super Admins will be notified.')) {
+      requestPermissionMutation.mutate()
+    }
+  }
+
+  const handleSharingPermissionToggle = (user: User, allowedAdmins?: string[]) => {
+    if (user.role !== 'admin') {
+      toast.error('Only admins can have file sharing permission')
+      return
+    }
+    
+    const confirmMessage = `Are you sure you want to ${user.canShareFiles ? 'revoke' : 'approve'} file sharing permission for ${user.name}?`
+    
+    if (window.confirm(confirmMessage)) {
+      sharingPermissionMutation.mutate({ 
+        userId: user._id, 
+        canShareFiles: !user.canShareFiles,
+        allowedSharingAdmins: allowedAdmins
+      })
+    }
+  }
+
+  const handleOpenAllowedAdminsModal = async (admin: User) => {
+    try {
+      console.log('Opening modal for admin:', admin)
+      console.log('Admin allowedSharingAdmins from list:', admin.allowedSharingAdmins)
+      
+      // Fetch fresh admin data to ensure we have the latest allowedSharingAdmins
+      try {
+        const freshAdminData = await usersAPI.getById(admin._id)
+        const freshAdmin = freshAdminData.data.data
+        console.log('Fresh admin data:', freshAdmin)
+        console.log('Fresh allowedSharingAdmins:', freshAdmin.allowedSharingAdmins)
+        
+        // Use fresh data if available, otherwise fall back to passed admin
+        const adminToUse = freshAdmin || admin
+        
+        // Handle both object and string ID formats
+        let allowedIds: string[] = []
+        if (adminToUse.allowedSharingAdmins && Array.isArray(adminToUse.allowedSharingAdmins)) {
+          allowedIds = adminToUse.allowedSharingAdmins.map((a: any) => {
+            if (typeof a === 'string') return a
+            if (typeof a === 'object' && a._id) return a._id
+            return String(a)
+          })
+        }
+        
+        console.log('Extracted allowed IDs:', allowedIds)
+        
+        setSelectedAdminForSharing(adminToUse as User)
+        setSelectedAllowedAdmins(allowedIds)
+        setShowAllowedAdminsModal(true)
+        console.log('Modal state set to true')
+      } catch (fetchError) {
+        console.warn('Failed to fetch fresh admin data, using passed data:', fetchError)
+        // Fallback to using the passed admin data
+        let allowedIds: string[] = []
+        if (admin.allowedSharingAdmins && Array.isArray(admin.allowedSharingAdmins)) {
+          allowedIds = admin.allowedSharingAdmins.map((a: any) => {
+            if (typeof a === 'string') return a
+            if (typeof a === 'object' && a._id) return a._id
+            return String(a)
+          })
+        }
+        setSelectedAdminForSharing(admin)
+        setSelectedAllowedAdmins(allowedIds)
+        setShowAllowedAdminsModal(true)
+      }
+    } catch (error) {
+      console.error('Error opening modal:', error)
+      toast.error('Failed to open admin selection modal')
+    }
+  }
+
+  const handleSaveAllowedAdmins = () => {
+    if (!selectedAdminForSharing) return
+    
+    console.log('Saving allowed admins:', selectedAllowedAdmins)
+    console.log('For admin:', selectedAdminForSharing._id)
+    
+    sharingPermissionMutation.mutate({
+      userId: selectedAdminForSharing._id,
+      canShareFiles: true, // Keep it approved
+      allowedSharingAdmins: selectedAllowedAdmins
+    }, {
+      onSuccess: async (data) => {
+        console.log('Save success response:', data)
+        console.log('Saved allowedSharingAdmins:', data?.data?.data?.allowedSharingAdmins)
+        
+        // Update the admin object in state with the saved data
+        const updatedAdmin = {
+          ...selectedAdminForSharing,
+          allowedSharingAdmins: data?.data?.data?.allowedSharingAdmins || []
+        }
+        
+        setShowAllowedAdminsModal(false)
+        setSelectedAdminForSharing(null)
+        setSelectedAllowedAdmins([])
+        
+        // Invalidate and refetch to get updated data
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['sharing-permission-requests'] }),
+          queryClient.invalidateQueries({ queryKey: ['users'] }),
+          queryClient.invalidateQueries({ queryKey: ['admins'] })
+        ])
+        
+        // Note: refetchRequests will be called by the component's own query invalidation
+        
+        // If the updated admin is the current user, refresh their profile
+        if (currentUser?._id === selectedAdminForSharing._id) {
+          await refreshUser()
+        }
+        
+        toast.success('Allowed admins updated successfully')
+      },
+      onError: (error: any) => {
+        console.error('Save error:', error)
+        console.error('Error response:', error.response?.data)
+        toast.error(error.response?.data?.message || 'Failed to save allowed admins')
+      }
+    })
+  }
+
+  // Check if current admin has file sharing permission
+  const currentAdminHasPermission = currentUser?.role === 'admin' && currentUser?.canShareFiles === true
 
   const users = data?.data?.data || []
   const admins = adminsData?.data?.data || []
@@ -439,6 +876,17 @@ export default function Users() {
             }`}>
               {user.isActive ? 'Active' : 'Deactive'}
             </span>
+            {/* File Sharing Permission Badge (for admins) */}
+            {user.role === 'admin' && (
+              <span className={`inline-flex items-center px-2 py-1 text-xs font-semibold rounded-full ${
+                user.canShareFiles 
+                  ? 'bg-blue-100 text-blue-800' 
+                  : 'bg-gray-100 text-gray-600'
+              }`} title={user.canShareFiles ? 'Can share files with other admins' : 'Cannot share files with other admins'}>
+                <ShareIcon className="h-3 w-3 mr-1" />
+                {user.canShareFiles ? 'Can Share' : 'No Share'}
+              </span>
+            )}
                       {/* Status toggle for authorized users */}
           {canManageUser(user) && (
             <button
@@ -456,6 +904,25 @@ export default function Users() {
               }`} />
             </button>
           )}
+            {/* File Sharing Permission Toggle (for SuperSuperAdmin only, on admin users) */}
+            {currentUser?.role === 'superSuperAdmin' && user.role === 'admin' && (
+              <button
+                onClick={() => handleSharingPermissionToggle(user)}
+                disabled={sharingPermissionMutation.isPending}
+                className={`p-1 ${
+                  user.canShareFiles 
+                    ? 'text-green-600 hover:text-green-800' 
+                    : 'text-gray-400 hover:text-gray-600'
+                } disabled:opacity-50`}
+                title={user.canShareFiles ? 'Revoke file sharing permission' : 'Approve file sharing permission'}
+              >
+                {user.canShareFiles ? (
+                  <CheckCircleIcon className="h-4 w-4" />
+                ) : (
+                  <XCircleIcon className="h-4 w-4" />
+                )}
+              </button>
+            )}
             <button
               onClick={() => handleViewDetails(user)}
               className="text-blue-600 hover:text-blue-800 p-1"
@@ -504,6 +971,17 @@ export default function Users() {
           }`}>
             {user.isActive ? 'Active' : 'Deactive'}
           </span>
+          {/* File Sharing Permission Badge (for admins) */}
+          {user.role === 'admin' && (
+            <span className={`inline-flex items-center px-2 py-1 text-xs font-semibold rounded-full ${
+              user.canShareFiles 
+                ? 'bg-blue-100 text-blue-800' 
+                : 'bg-gray-100 text-gray-600'
+            }`} title={user.canShareFiles ? 'Can share files with other admins' : 'Cannot share files with other admins'}>
+              <ShareIcon className="h-3 w-3 mr-1" />
+              {user.canShareFiles ? 'Can Share' : 'No Share'}
+            </span>
+          )}
           {/* Status toggle for authorized users */}
           {canManageUser(user) && (
             <button
@@ -519,6 +997,25 @@ export default function Users() {
               <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
                 user.isActive ? 'translate-x-5' : 'translate-x-0'
               }`} />
+            </button>
+          )}
+          {/* File Sharing Permission Toggle (for SuperSuperAdmin only, on admin users) */}
+          {currentUser?.role === 'superSuperAdmin' && user.role === 'admin' && (
+            <button
+              onClick={() => handleSharingPermissionToggle(user)}
+              disabled={sharingPermissionMutation.isPending}
+              className={`p-1 ${
+                user.canShareFiles 
+                  ? 'text-green-600 hover:text-green-800' 
+                  : 'text-gray-400 hover:text-gray-600'
+              } disabled:opacity-50`}
+              title={user.canShareFiles ? 'Revoke file sharing permission' : 'Approve file sharing permission'}
+            >
+              {user.canShareFiles ? (
+                <CheckCircleIcon className="h-5 w-5" />
+              ) : (
+                <XCircleIcon className="h-5 w-5" />
+              )}
             </button>
           )}
           <button
@@ -575,6 +1072,82 @@ export default function Users() {
           </button>
         )}
       </div>
+
+      {/* File Sharing Permission Status Banner (for Admins) */}
+      {currentUser?.role === 'admin' && (
+        <div className={`bg-white rounded-lg shadow p-4 border-l-4 ${
+          currentAdminHasPermission 
+            ? 'border-green-500' 
+            : 'border-yellow-500'
+        }`}>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center">
+              <ShareIcon className={`h-5 w-5 mr-2 ${
+                currentAdminHasPermission ? 'text-green-600' : 'text-yellow-600'
+              }`} />
+              <div>
+                <h3 className="text-sm font-medium text-gray-900">
+                  File Sharing Permission
+                </h3>
+                <p className="text-sm text-gray-600">
+                  {currentAdminHasPermission 
+                    ? 'You have permission to share files with other admins. You can select admins to share with when uploading files.'
+                    : 'You do not have permission to share files with other admins. Please contact a Super Admin to request this permission.'}
+                </p>
+                {currentUser?.sharingPermissionApprovedBy && (
+                  <p className="text-xs text-gray-500 mt-1">
+                    Approved by: {currentUser.sharingPermissionApprovedBy.name} 
+                    {currentUser.sharingPermissionApprovedAt && 
+                      ` on ${new Date(currentUser.sharingPermissionApprovedAt).toLocaleDateString()}`
+                    }
+                  </p>
+                )}
+              </div>
+            </div>
+            {!currentAdminHasPermission && (
+              <div className="flex items-center space-x-2">
+                <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                  Permission Required
+                </span>
+                <button
+                  onClick={() => handleRequestPermission()}
+                  disabled={requestPermissionMutation.isPending}
+                  className="inline-flex items-center px-3 py-1 rounded-md text-xs font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {requestPermissionMutation.isPending ? (
+                    <>
+                      <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white mr-2"></div>
+                      Requesting...
+                    </>
+                  ) : (
+                    <>
+                      <ShareIcon className="h-3 w-3 mr-1" />
+                      Request Permission
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* File Sharing Permission Management Section (for Super Admins) */}
+      {(currentUser?.role === 'superAdmin' || currentUser?.role === 'superSuperAdmin') && (
+        <>
+          {/* Pending Requests Section */}
+          <PendingPermissionRequests 
+            sharingPermissionMutation={sharingPermissionMutation}
+          />
+          
+          {/* Admins Who Requested Permission Management */}
+          <AdminsWithPermissionRequests 
+            sharingPermissionMutation={sharingPermissionMutation}
+            handleSharingPermissionToggle={handleSharingPermissionToggle}
+            handleOpenAllowedAdminsModal={handleOpenAllowedAdminsModal}
+          />
+        </>
+      )}
 
       {/* Filters */}
       <div className="bg-white rounded-lg shadow">
@@ -1112,6 +1685,49 @@ export default function Users() {
                 </div>
               </div>
 
+              {/* File Sharing Permission (for admins) */}
+              {selectedUser.role === 'admin' && (
+                <div className="p-3 bg-blue-50 rounded-lg border border-blue-200">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center">
+                      <ShareIcon className="h-5 w-5 text-blue-600 mr-2" />
+                      <div>
+                        <h5 className="text-sm font-medium text-gray-900">File Sharing Permission</h5>
+                        <p className="text-xs text-gray-600">
+                          {selectedUser.canShareFiles 
+                            ? 'This admin can share files with other admins'
+                            : 'This admin cannot share files with other admins'}
+                        </p>
+                        {selectedUser.sharingPermissionApprovedBy && (
+                          <p className="text-xs text-gray-500 mt-1">
+                            Approved by: {selectedUser.sharingPermissionApprovedBy.name}
+                            {selectedUser.sharingPermissionApprovedAt && 
+                              ` on ${new Date(selectedUser.sharingPermissionApprovedAt).toLocaleDateString()}`
+                            }
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    {(currentUser?.role === 'superAdmin' || currentUser?.role === 'superSuperAdmin') && (
+                      <button
+                        onClick={() => {
+                          handleSharingPermissionToggle(selectedUser)
+                          setShowViewModal(false)
+                        }}
+                        disabled={sharingPermissionMutation.isPending}
+                        className={`px-3 py-1 text-xs font-medium rounded ${
+                          selectedUser.canShareFiles
+                            ? 'bg-red-100 text-red-700 hover:bg-red-200'
+                            : 'bg-green-100 text-green-700 hover:bg-green-200'
+                        } disabled:opacity-50`}
+                      >
+                        {selectedUser.canShareFiles ? 'Revoke' : 'Approve'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* Contact Information */}
               <div className="space-y-3">
                 <h5 className="font-medium text-gray-900">Contact Information</h5>
@@ -1196,6 +1812,101 @@ export default function Users() {
                 className="btn-secondary"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Allowed Sharing Admins Modal */}
+      {showAllowedAdminsModal && selectedAdminForSharing && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between p-4 border-b">
+              <h3 className="text-lg font-semibold text-gray-900">
+                Select Admins {selectedAdminForSharing.name} Can Share With
+              </h3>
+              <button
+                onClick={() => {
+                  setShowAllowedAdminsModal(false);
+                  setSelectedAdminForSharing(null);
+                  setSelectedAllowedAdmins([]);
+                }}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <XMarkIcon className="h-6 w-6" />
+              </button>
+            </div>
+            
+            <div className="p-4 space-y-4">
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                <p className="text-sm text-blue-700">
+                  Select which admins <strong>{selectedAdminForSharing.name}</strong> can share files with.
+                  Only selected admins will appear in their sharing list.
+                </p>
+              </div>
+              
+              {isLoadingAdmins ? (
+                <div className="text-center py-4">Loading admins...</div>
+              ) : admins.length === 0 ? (
+                <div className="text-center py-4 text-gray-500">No admins available</div>
+              ) : (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Select allowed admins:
+                  </label>
+                  <div className="border border-gray-300 rounded-lg p-3 max-h-60 overflow-y-auto">
+                    {admins
+                      .filter((admin: User) => admin._id !== selectedAdminForSharing._id && admin.isActive)
+                      .map((admin: User) => (
+                        <label key={admin._id} className="flex items-center space-x-2 py-1">
+                          <input
+                            type="checkbox"
+                            checked={selectedAllowedAdmins.includes(admin._id)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedAllowedAdmins([...selectedAllowedAdmins, admin._id]);
+                              } else {
+                                setSelectedAllowedAdmins(selectedAllowedAdmins.filter(id => id !== admin._id));
+                              }
+                            }}
+                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                          />
+                          <span className="text-sm text-gray-900">{admin.name}</span>
+                          <span className="text-xs text-gray-500">({admin.email})</span>
+                        </label>
+                      ))}
+                  </div>
+                  <p className="text-xs text-gray-500 mt-2">
+                    Selected: {selectedAllowedAdmins.length} admin(s)
+                  </p>
+                  {selectedAllowedAdmins.length === 0 && (
+                    <p className="text-xs text-yellow-600 mt-1">
+                      ⚠️ If no admins are selected, {selectedAdminForSharing.name} won't be able to share files with anyone.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+            
+            <div className="flex justify-end gap-2 p-4 border-t">
+              <button
+                onClick={() => {
+                  setShowAllowedAdminsModal(false);
+                  setSelectedAdminForSharing(null);
+                  setSelectedAllowedAdmins([]);
+                }}
+                className="btn-secondary"
+                disabled={sharingPermissionMutation.isPending}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveAllowedAdmins}
+                className="btn-primary"
+                disabled={sharingPermissionMutation.isPending || isLoadingAdmins}
+              >
+                {sharingPermissionMutation.isPending ? 'Saving...' : 'Save'}
               </button>
             </div>
           </div>

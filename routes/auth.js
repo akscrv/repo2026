@@ -123,11 +123,22 @@ router.post('/login', [
 
     const { emailOrPhone, password } = req.body;
 
+    // Trim whitespace from inputs to prevent issues
+    const trimmedEmailOrPhone = emailOrPhone?.trim();
+    const trimmedPassword = password?.trim();
+
+    if (!trimmedEmailOrPhone || !trimmedPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email/Phone and password are required'
+      });
+    }
+
     // Check if user exists by email or phone
     const user = await User.findOne({
       $or: [
-        { email: emailOrPhone },
-        { phone: emailOrPhone }
+        { email: trimmedEmailOrPhone },
+        { phone: trimmedEmailOrPhone }
       ]
     }).select('+password');
 
@@ -146,10 +157,12 @@ router.post('/login', [
       });
     }
 
-    // Check password
-    const isMatch = await user.matchPassword(password);
+    // Check password (use trimmed password)
+    const isMatch = await user.matchPassword(trimmedPassword);
 
     if (!isMatch) {
+      // Log failed login attempt for debugging (without sensitive data)
+      console.log(`❌ Failed login attempt for: ${trimmedEmailOrPhone} (User ID: ${user._id}, Role: ${user.role})`);
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials'
@@ -186,13 +199,11 @@ router.post('/login', [
       userAgent: req.get('User-Agent')
     });
     
-    // Save user to update session info
-    await user.save();
-
     // Generate token (this will also update session info)
     const token = user.getSignedJwtToken();
     
-    // Save again to persist the new session token
+    // Save user once with all updates (session token, login history, etc.)
+    // Note: Password is NOT modified, so pre-save hook will skip hashing
     await user.save();
 
     res.json({
@@ -217,7 +228,9 @@ router.post('/login', [
 // @access  Private
 router.get('/me', authenticateToken, async (req, res) => {
   try {
-    const user = await User.findById(req.user._id);
+    const user = await User.findById(req.user._id)
+      .populate('allowedSharingAdmins', 'name email')
+      .select('-password -resetPasswordToken -resetPasswordExpire');
 
     res.json({
       success: true,
@@ -486,8 +499,10 @@ router.post('/logout', authenticateToken, async (req, res) => {
 // @access  Private
 router.get('/validate-session', authenticateToken, async (req, res) => {
   try {
-    // Get fresh user data with online status
-    const user = await User.findById(req.user._id).select('-password');
+    // Get fresh user data with online status and allowedSharingAdmins
+    const user = await User.findById(req.user._id)
+      .populate('allowedSharingAdmins', 'name email')
+      .select('-password -resetPasswordToken -resetPasswordExpire');
     
     res.json({
       success: true,

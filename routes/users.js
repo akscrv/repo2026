@@ -132,6 +132,164 @@ router.get('/', authenticateToken, authorizeRole('superSuperAdmin', 'admin', 'su
   }
 });
 
+// @desc    Request file sharing permission (Admin)
+// @route   POST /api/users/request-sharing-permission
+// @access  Private (Admin)
+router.post('/request-sharing-permission',
+  authenticateToken,
+  authorizeRole('admin'),
+  async (req, res) => {
+    try {
+      // Find the admin making the request
+      const admin = await User.findById(req.user._id);
+      
+      if (!admin) {
+        return res.status(404).json({
+          success: false,
+          message: 'Admin not found'
+        });
+      }
+
+      // Check if admin already has permission
+      if (admin.canShareFiles) {
+        return res.status(400).json({
+          success: false,
+          message: 'You already have file sharing permission'
+        });
+      }
+
+      // Find all Super Admins
+      const superAdmins = await User.find({
+        role: { $in: ['superSuperAdmin', 'superAdmin'] },
+        isActive: true,
+        isDeleted: { $ne: true }
+      }).select('_id name email');
+
+      if (superAdmins.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'No Super Admins found to notify'
+        });
+      }
+
+      // Create notifications for all Super Admins
+      const Notification = require('../models/Notification');
+      const notifications = superAdmins.map(superAdmin => ({
+        user: admin._id,
+        userName: admin.name,
+        userRole: 'admin',
+        admin: superAdmin._id,
+        action: 'permission_request',
+        vehicleNumber: 'N/A',
+        ipAddress: req.ip || req.connection.remoteAddress || 'Unknown',
+        location: {
+          city: 'System',
+          region: 'System',
+          country: 'System'
+        },
+        isOnline: true,
+        fileName: `File Sharing Permission Request from ${admin.name}`,
+        adminName: admin.name
+      }));
+
+      await Notification.insertMany(notifications);
+
+      res.json({
+        success: true,
+        message: 'Permission request sent successfully. Super Admins will be notified.',
+        data: {
+          requestedAt: new Date(),
+          notifiedSuperAdmins: superAdmins.length
+        }
+      });
+    } catch (error) {
+      console.error('Request sharing permission error:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Server error'
+      });
+    }
+  }
+);
+
+// @desc    Get pending file sharing permission requests
+// @route   GET /api/users/sharing-permission-requests
+// @access  Private (SuperSuperAdmin, SuperAdmin)
+router.get('/sharing-permission-requests',
+  authenticateToken,
+  authorizeRole('superSuperAdmin', 'superAdmin'),
+  async (req, res) => {
+    try {
+      const Notification = require('../models/Notification');
+      
+      // Get all permission requests for this super admin (both read and unread)
+      // This includes pending requests and approved ones (to show who has requested)
+      const requests = await Notification.find({
+        admin: req.user._id,
+        action: 'permission_request'
+      })
+      .populate({
+        path: 'user',
+        select: 'name email role canShareFiles sharingPermissionApprovedBy sharingPermissionApprovedAt allowedSharingAdmins',
+        populate: [
+          {
+            path: 'sharingPermissionApprovedBy',
+            select: 'name email'
+          },
+          {
+            path: 'allowedSharingAdmins',
+            select: 'name email'
+          }
+        ]
+      })
+      .sort({ createdAt: -1 })
+      .lean();
+
+      // Group by admin (user) to avoid duplicates, keeping the most recent request
+      const uniqueRequests = new Map();
+      
+      for (const request of requests) {
+        const adminId = request.user._id.toString();
+        if (!uniqueRequests.has(adminId)) {
+          uniqueRequests.set(adminId, {
+            _id: request._id,
+            admin: {
+              _id: request.user._id,
+              name: request.user.name,
+              email: request.user.email,
+              canShareFiles: request.user.canShareFiles,
+              sharingPermissionApprovedBy: request.user.sharingPermissionApprovedBy ? {
+                _id: request.user.sharingPermissionApprovedBy._id,
+                name: request.user.sharingPermissionApprovedBy.name,
+                email: request.user.sharingPermissionApprovedBy.email
+              } : null,
+              sharingPermissionApprovedAt: request.user.sharingPermissionApprovedAt,
+              allowedSharingAdmins: request.user.allowedSharingAdmins || []
+            },
+            requestedAt: request.createdAt,
+            notificationId: request._id,
+            isPending: !request.isRead && !request.user.canShareFiles
+          });
+        }
+      }
+
+      const requestsArray = Array.from(uniqueRequests.values());
+
+      res.json({
+        success: true,
+        data: requestsArray,
+        count: requestsArray.length
+      });
+    } catch (error) {
+      console.error('Get sharing permission requests error:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Server error'
+      });
+    }
+  }
+);
+
 // @desc    Get user by ID
 // @route   GET /api/users/:id
 // @access  Private (Admin, SuperAdmin)
@@ -139,6 +297,7 @@ router.get('/:id', authenticateToken, authorizeRole('superSuperAdmin', 'admin', 
   try {
     const user = await User.findById(req.params.id)
       .populate('createdBy', 'name email')
+      .populate('allowedSharingAdmins', 'name email')
       .select('-password -resetPasswordToken -resetPasswordExpire');
 
     if (!user) {
@@ -894,8 +1053,75 @@ router.delete('/:id',
           await associatedUser.save();
         }
         
-        // Note: Excel files are kept for historical records
-        // Only mark them as inactive if needed
+        // ============================================================
+        // 🗑️ CASCADE DELETE: Delete files where this admin is primary admin
+        // ============================================================
+        try {
+          // ExcelFile is already imported at the top
+          const VehicleLookup = require('../models/VehicleLookup');
+          const { deleteFileFromGCS } = require('../services/gcsService');
+          
+          // Find all files where this admin is the primary admin (assignedTo)
+          const filesToDelete = await ExcelFile.find({ 
+            assignedTo: userId,
+            isActive: true // Only delete active files
+          });
+          
+          if (filesToDelete.length > 0) {
+            console.log(`🗑️ Found ${filesToDelete.length} file(s) to delete for primary admin ${userId}`);
+            
+            let deletedCount = 0;
+            let gcsDeletedCount = 0;
+            let gcsErrorCount = 0;
+            let vehicleLookupDeletedCount = 0;
+            
+            for (const file of filesToDelete) {
+              try {
+                // 1. Delete from GCS (if filePath exists and is valid)
+                if (file.filePath) {
+                  try {
+                    await deleteFileFromGCS(file.filePath);
+                    gcsDeletedCount++;
+                    console.log(`✅ Deleted file from GCS: ${file.originalName} (${file.filePath})`);
+                  } catch (gcsError) {
+                    gcsErrorCount++;
+                    console.error(`⚠️ Failed to delete file from GCS: ${file.originalName}`, gcsError.message);
+                    // Continue with MongoDB deletion even if GCS deletion fails
+                  }
+                }
+                
+                // 2. Delete all VehicleLookup records associated with this file
+                const vehicleLookupResult = await VehicleLookup.deleteMany({ 
+                  excelFileId: file._id 
+                });
+                vehicleLookupDeletedCount += vehicleLookupResult.deletedCount;
+                console.log(`✅ Deleted ${vehicleLookupResult.deletedCount} VehicleLookup record(s) for file: ${file.originalName}`);
+                
+                // 3. Delete the ExcelFile from MongoDB
+                await ExcelFile.findByIdAndDelete(file._id);
+                deletedCount++;
+                console.log(`✅ Deleted ExcelFile from MongoDB: ${file.originalName} (ID: ${file._id})`);
+                
+              } catch (fileError) {
+                console.error(`❌ Error deleting file ${file.originalName}:`, fileError);
+                // Continue with next file even if one fails
+              }
+            }
+            
+            console.log(`📊 File deletion summary:`);
+            console.log(`   - Files deleted from MongoDB: ${deletedCount}/${filesToDelete.length}`);
+            console.log(`   - Files deleted from GCS: ${gcsDeletedCount}/${filesToDelete.length}`);
+            console.log(`   - GCS deletion errors: ${gcsErrorCount}`);
+            console.log(`   - VehicleLookup records deleted: ${vehicleLookupDeletedCount}`);
+            
+          } else {
+            console.log(`ℹ️ No files found for primary admin ${userId} - nothing to delete`);
+          }
+        } catch (cascadeError) {
+          console.error('❌ Error during cascade file deletion:', cascadeError);
+          // Don't fail the user deletion if file deletion fails
+          // Log the error but continue
+        }
       }
 
       res.json({
@@ -1025,9 +1251,20 @@ router.get('/stats/overview', authenticateToken, authorizeRole('superSuperAdmin'
 
 // @desc    Get list of admin users
 // @route   GET /api/users/admins/list
-// @access  Private (SuperSuperAdmin, SuperAdmin)
-router.get('/admins/list', authenticateToken, authorizeRole('superSuperAdmin', 'superAdmin'), async (req, res) => {
+// @access  Private (SuperSuperAdmin, SuperAdmin, Admin with sharing permission)
+router.get('/admins/list', authenticateToken, authorizeRole('superSuperAdmin', 'superAdmin', 'admin'), async (req, res) => {
   try {
+    // For admin users, check if they have sharing permission
+    if (req.user.role === 'admin') {
+      const currentUser = await User.findById(req.user._id).select('canShareFiles');
+      if (!currentUser || !currentUser.canShareFiles) {
+        return res.status(403).json({
+          success: false,
+          message: 'You do not have permission to view admin list. Please request file sharing permission from super admin.'
+        });
+      }
+    }
+
     const admins = await User.find({ 
       role: 'admin', 
       isActive: true 
@@ -1047,5 +1284,131 @@ router.get('/admins/list', authenticateToken, authorizeRole('superSuperAdmin', '
     });
   }
 });
+
+// @desc    Approve/Revoke admin file sharing permission
+// @route   PUT /api/users/:id/sharing-permission
+// @access  Private (SuperSuperAdmin, SuperAdmin)
+router.put('/:id/sharing-permission', 
+  authenticateToken, 
+  authorizeRole('superSuperAdmin', 'superAdmin'),
+  [
+    body('canShareFiles').isBoolean().withMessage('canShareFiles must be a boolean')
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Validation error',
+          errors: errors.array()
+        });
+      }
+
+      const adminId = req.params.id;
+      const { canShareFiles, allowedSharingAdmins } = req.body;
+
+      // Find the admin
+      const admin = await User.findById(adminId);
+      if (!admin) {
+        return res.status(404).json({
+          success: false,
+          message: 'Admin not found'
+        });
+      }
+
+      // Verify it's an admin
+      if (admin.role !== 'admin') {
+        return res.status(400).json({
+          success: false,
+          message: 'User must be an admin to grant file sharing permission'
+        });
+      }
+
+      // Update sharing permission
+      admin.canShareFiles = canShareFiles;
+      if (canShareFiles) {
+        admin.sharingPermissionApprovedBy = req.user._id;
+        admin.sharingPermissionApprovedAt = new Date();
+        
+        // Update allowed sharing admins if provided
+        if (allowedSharingAdmins !== undefined) {
+          // Validate that all IDs are valid admin IDs
+          if (Array.isArray(allowedSharingAdmins)) {
+            // Verify all IDs exist and are admins
+            const validAdmins = await User.find({
+              _id: { $in: allowedSharingAdmins },
+              role: 'admin',
+              isActive: true
+            }).select('_id');
+            
+            const validAdminIds = validAdmins.map(a => a._id.toString());
+            const invalidIds = allowedSharingAdmins.filter(id => !validAdminIds.includes(id.toString()));
+            
+            if (invalidIds.length > 0) {
+              return res.status(400).json({
+                success: false,
+                message: `Invalid admin IDs: ${invalidIds.join(', ')}`
+              });
+            }
+            
+            // Convert to ObjectIds
+            const mongoose = require('mongoose');
+            admin.allowedSharingAdmins = allowedSharingAdmins.map(id => new mongoose.Types.ObjectId(id));
+          } else {
+            admin.allowedSharingAdmins = [];
+          }
+        }
+        
+        // Mark all permission request notifications as read for this admin
+        const Notification = require('../models/Notification');
+        await Notification.updateMany(
+          {
+            user: adminId,
+            action: 'permission_request',
+            isRead: false
+          },
+          {
+            isRead: true
+          }
+        );
+      } else {
+        admin.sharingPermissionApprovedBy = null;
+        admin.sharingPermissionApprovedAt = null;
+        admin.allowedSharingAdmins = []; // Clear allowed admins when permission is revoked
+      }
+
+      // Mark the array as modified to ensure Mongoose saves it
+      admin.markModified('allowedSharingAdmins');
+      
+      await admin.save();
+
+      // Populate allowedSharingAdmins for response
+      await admin.populate('allowedSharingAdmins', 'name email');
+      
+      console.log('✅ Saved allowedSharingAdmins:', admin.allowedSharingAdmins.map(a => a._id || a));
+
+      res.json({
+        success: true,
+        message: `File sharing permission ${canShareFiles ? 'approved' : 'revoked'} successfully`,
+        data: {
+          _id: admin._id,
+          name: admin.name,
+          email: admin.email,
+          canShareFiles: admin.canShareFiles,
+          sharingPermissionApprovedBy: admin.sharingPermissionApprovedBy,
+          sharingPermissionApprovedAt: admin.sharingPermissionApprovedAt,
+          allowedSharingAdmins: admin.allowedSharingAdmins || []
+        }
+      });
+    } catch (error) {
+      console.error('Update sharing permission error:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Server error'
+      });
+    }
+  }
+);
 
 module.exports = router; 

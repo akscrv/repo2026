@@ -31,8 +31,14 @@ const excelFileSchema = new mongoose.Schema({
     ref: 'User',
     required: [true, 'Primary assigned admin is required']
   },
-  // New field for multiple admin assignments
+  // New field for multiple admin assignments (for SuperAdmin uploads)
   assignedAdmins: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  }],
+  // Admin-to-admin file sharing (when admin shares their own files with other admins)
+  sharedAdmins: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
@@ -78,6 +84,7 @@ const excelFileSchema = new mongoose.Schema({
 excelFileSchema.index({ uploadedBy: 1, createdAt: -1 });
 excelFileSchema.index({ assignedTo: 1, createdAt: -1 });
 excelFileSchema.index({ assignedAdmins: 1, createdAt: -1 });
+excelFileSchema.index({ sharedAdmins: 1, createdAt: -1 });
 excelFileSchema.index({ status: 1 });
 
 // Pre-save middleware to ensure assignedTo is always the first admin in assignedAdmins
